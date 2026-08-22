@@ -1392,7 +1392,7 @@ static const char* kShadowOrthoResolutionNames[] = {
 	"0 - 128", "1 - 256", "2 - 512", "3 - 1024", "4 - 2048",
 };
 static const char* kEdgeDetectionNames[] = {
-	"0 - Luma", "1 - Color", "2 - Depth",
+	"0 - Luma", "1 - Color", "2 - Depth", "3 - Luma + Depth",
 };
 
 #define ENUM_OPT(names) EnumOptions{ names, (int)(sizeof(names) / sizeof(names[0])) }
