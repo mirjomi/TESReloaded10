@@ -452,7 +452,9 @@ Enabled = true                        # Replaces vanilla HDR tonemapping shaders
 
 [_Shaders.DitherBuster.Main]
 Strength = 1.0                        # AA blend strength (0.0 = off, 1.0 = full).
-MaskPower = 0.5                       # Edge detection sensitivity. Higher = fewer edges AA'd.
+MaskPower = 0.5                       # Edge detection sensitivity, as the exponent in pow(0.002, MaskPower). Because the base is below 1, RAISING this LOWERS the threshold and antialiases MORE edges - the opposite of what this line used to claim. 0.5 gives a threshold of 0.045, 1.0 gives 0.002.
+DitherThreshold = 0.08                # [0.0-1.0, 0 disables] Catches isolated pixels that disagree with all four neighbours at once - alpha test dither, which the edge mask above is mathematically blind to because central differences cancel on a checkerboard. Those pixels get an isotropic average instead of the directional pass. Lower catches more dither; too low and it will start averaging fine texture detail and thin geometry like wires.
+Radius = 1.0                          # [0.0-3.0] How far along the edge the directional samples reach, in texels. The samples were previously offset by the raw luma difference, which on an ordinary edge is a few hundredths of a texel - six samples of the same pixel, doing nothing. Normalising the direction and scaling it by this is what NFAA and BIAA do. 0 restores the old raw behaviour; above about 1.5 it starts to smear.
 
 [_Shaders.DitherBuster.Status]
 Enabled = false                       # Reduces dithering artifacts via luma-edge anti-aliasing.
