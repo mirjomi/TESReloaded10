@@ -44,7 +44,7 @@ namespace MaterialPass {
 		"    VS_OUT OUT;\n"
 		"    float4 localPos = float4(IN.pos.xyz, 1.0);\n"
 		"    float4 worldPos = mul(localPos, gWorld);\n"
-		"    OUT.pos = mul(float4(worldPos.xyz * 0.99999, 1.0), gViewProj);\n"
+		"    OUT.pos = mul(float4(worldPos.xyz * 0.9997, 1.0), gViewProj);\n"
 		"    OUT.uv = IN.uv.xy;\n"
 		"    OUT.worldRel = worldPos.xyz;\n"
 		"    OUT.normalRel = normalize(mul(float4(IN.normal.xyz, 0.0), gWorld).xyz);\n"
@@ -116,7 +116,7 @@ namespace MaterialPass {
 		"    VS_OUT OUT;\n"
 		"    float4 localPos = float4(IN.pos.xyz, 1.0);\n"
 		"    float4 worldPos = mul(localPos, gWorld);\n"
-		"    OUT.pos = mul(float4(worldPos.xyz * 0.99999, 1.0), gViewProj);\n"
+		"    OUT.pos = mul(float4(worldPos.xyz * 0.9997, 1.0), gViewProj);\n"
 		"    OUT.uv = IN.uv.xy;\n"
 		"    OUT.worldRel = worldPos.xyz;\n"
 		"    OUT.tangentRel = normalize(mul(float4(IN.tangent.xyz, 0.0), gWorld).xyz);\n"
@@ -858,11 +858,23 @@ namespace MaterialPass {
 		// the depth buffer runs. Only the projected position moves; worldRel keeps the true
 		// position so the lighting is unaffected.
 		//
-		// 0.99999 clears the float error in the rebuilt projection by a wide margin while
-		// staying far below the separation between any two real surfaces. A larger pull works
-		// too, but 0.001 of view depth is several units at long range, which is enough to reach
-		// through real geometry and read as a wallhack, so the smallest pull that still wins the
-		// tie is the right one.
+		// 0.9997 - a pull of 0.0003 of view depth - is measured, not derived, and the arithmetic
+		// argument does not survive contact with the game. On paper 0.00001 clears the float error
+		// in the rebuilt projection a hundred times over. It does not clear it at all. Measured on
+		// a ladder, sweeping the light across a wall with MaterialLight DebugMode 2:
+		//
+		//     0.00001  flickers          0.0001  clean
+		//     0.00003  flickers          0.001   clean
+		//
+		// So the threshold sits between 0.00003 and 0.0001 - about ten times larger than the
+		// arithmetic predicts, which means the error being cleared is bigger than the two step
+		// matrix multiply accounts for. 0.0003 is the step above the threshold: a factor of three
+		// of margin, without giving back much reach. The pull is proportional, so geometry 1500
+		// units out - the beam's MaxDistance - moves 0.45 units toward the camera, against 1.5
+		// units at the 0.001 this replaces.
+		//
+		// Do not lower this on the arithmetic alone. That is exactly how 0.00001 came to ship, and
+		// the flicker it leaves behind is faint enough to survive a quick look for it.
 		//
 		// This offset was for a long time suspected of causing a second artifact - a wall poster
 		// in one interior disappearing under this pass - because changing its magnitude changed
