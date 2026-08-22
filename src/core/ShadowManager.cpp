@@ -709,8 +709,19 @@ void ShadowManager::RenderShadowMaps() {
 					D3DXMATRIX translationMatrix;
 					D3DXMatrixTranslation(&translationMatrix, difference.x, difference.y, difference.z);
 					ShadowMap->ShadowCameraToLight = translationMatrix * ShadowMap->ShadowCameraToLight;
+
+					// The cascade centre has to follow the same translation. It is stored in
+					// camera relative space and is only rewritten inside GetCascadeViewProj,
+					// so on the three frames out of four where this cascade is not re-rendered
+					// it stays in the old camera's frame while SunShadows compares it against
+					// positions in the new one. That drifts the Far to Lod blend band against
+					// the geometry and snaps it back every fourth frame.
+					ShadowMap->ShadowMapCascadeCenterRadius.x -= difference.x;
+					ShadowMap->ShadowMapCascadeCenterRadius.y -= difference.y;
+					ShadowMap->ShadowMapCascadeCenterRadius.z -= difference.z;
+
 					ShadowMap->CameraTranslation = newCameraTranslation;
-					
+
 					Shadows->Constants.ShadowBlur.y = Shadows->ShadowAtlasSurfaceMSAA ? 1.0f : 0.0f; // Disable blur for last cascade if MSAA is off.
 				}
 

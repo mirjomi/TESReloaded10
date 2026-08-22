@@ -102,8 +102,8 @@ float2 WarpDepth(float depth, float2 exponents) {
     return float2(pos, neg);
 }
 
-float GetLightAmountValueEVSM2(float2 moments, float depth, float bias, float bleedReduction, float formatBits) {
-    float2 exponents = GetEVSMExponents(40.0f, 5.0f, formatBits);
+float GetLightAmountValueEVSM2(float2 moments, float depth, float bias, float bleedReduction, float formatBits, float positiveExponent) {
+    float2 exponents = GetEVSMExponents(positiveExponent, 5.0f, formatBits);
     float2 warpedDepth = WarpDepth(depth, exponents);
 
     // Derivative of warping at depth
@@ -113,8 +113,8 @@ float GetLightAmountValueEVSM2(float2 moments, float depth, float bias, float bl
     return ChebyshevUpperBound(moments, warpedDepth.x, minVariance.x, bleedReduction);
 }
 
-float GetLightAmountValueEVSM4(float4 moments, float depth, float bias, float bleedReduction, float formatBits) {
-    float2 exponents = GetEVSMExponents(40.0f, 5.0f, formatBits);
+float GetLightAmountValueEVSM4(float4 moments, float depth, float bias, float bleedReduction, float formatBits, float positiveExponent) {
+    float2 exponents = GetEVSMExponents(positiveExponent, 5.0f, formatBits);
     float2 warpedDepth = WarpDepth(depth, exponents);
 
     // Derivative of warping at depth

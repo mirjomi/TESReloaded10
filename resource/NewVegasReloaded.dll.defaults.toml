@@ -617,10 +617,10 @@ UsePointShadowsNight = false         # Whether to cast shadows from point lights
 
 [_Shaders.ShadowsExteriors.SunSmoothing]
 SmoothSun = 1						 # Smooth the sun rotation by interpolating between positions.
-QuantizeSun = 1						 # Quantize the sun rotation by making sure the sun moves in constant size increments, instead of constantly.
+QuantizeSun = 0						 # Move the sun in fixed steps instead of continuously. This exists to stop the shadow maps being re-quantised every frame, which is what made distant shadows crawl, and the temporal filter under ShadowMaps now deals with that directly - so this is off, and the sun moves as it should. Turning it back on is a fallback, not an upgrade: the step has to be visible for it to help, and the temporal filter cross fades between the two positions rather than sliding, which makes the stepping worse rather than better.
 SmoothingFactor = 0.1				 # [0.0-1.0] Lower number means slower smoothing between positions, higher means more instantenous.
 YawStepSize = 1.0					 # [0.0-15.0] Step size for changes in the horizontal rotation of the sun, angle in degrees.
-PitchStepSize = 0.25				 # [0.0-15.0] Step size for changes in the vertical rotation of the sun, angle in degrees.
+PitchStepSize = 0.25				 # [0.0-15.0] Step size for changes in the vertical rotation of the sun, angle in degrees. Only used when QuantizeSun is on. Anything above about 0.03 makes the steps visible as shadows jumping.
 MaxJumpAngle = 5.0					 # [5.0-30.0] A maximum angle difference for which smoothing works, if higher the jump is instaneous. Required for time jumps / waiting.
 
 [_Shaders.ShadowsExteriors.FormsNear]
@@ -711,15 +711,22 @@ Intensity = 2.0                      # Rescale the intensity of screenspace shad
 
 [_Shaders.ShadowsExteriors.ShadowMaps]
 Mode = 2							 # Shadow mode, higher means higher quality, but higher computational cost. 0: VSM, 1: EVSM2, 2: EVSM4
-Format = 0							 # Texture format, higher means higher quality, but higher bandwidth cost. 0: 16 bit, 1: 32 bit
+Format = 0							 # Storage format for the shadow maps. 0: 16 bit, 1: 32 bit. Only worth raising on Mode 0, where the moments are stored unwarped and 16 bit UNORM cannot resolve the variance. On the EVSM modes the exponential warp already compresses the range, so 32 bit buys precision the maths cannot use - it only matters there if EVSMExponent is raised as well. Doubles the atlas, and quadruples that again with MSAA on.
 CascadeResolution = 2				 # Resolution used for shadow cascades. 0: 1024, 1: 1536, 2: 2048
-Prefilter = true					 # Enable prefiltering the shadow maps. Prefiltering is a blur.
+Prefilter = false					 # Blur the shadow maps before they are read. This was a way of hiding the crawl in distant shadows, and it hid it by throwing away the detail that was crawling. The temporal filter removes the crawl without that cost, so this now buys softer shadows and nothing else.
 MSAA = true							 # Enable multisample antialiasing for shadow maps.
 Mipmaps = false						 # DISABLED. Enable mipmaps for the shadow maps.
 Anisotropy = 0						 # DISABLED. Anisotropic filteric for mipmaps, 0: disabled, 1: 8x, 2: 16x
 Distance = 6000                      # Distance to render shadows for. The unit is the same as the game uses for i.e. fog values. 
 CascadeLambda = 0.9					 # [0.0-1.0] Controls how cascades are split, higher value means nearer cascades get higher resolution.
 LimitFrequency = true				 # Limit the update frequency of the furthest cascade (once per four frames).
+NormalBias = 1.0					 # Offset applied to a surface along its normal before it looks itself up in the shadow map, measured in shadow map texels. Too low leaves surfaces shadowing themselves, which shows up as shimmer on ground facing away from the sun; too high detaches shadows from the objects casting them.
+SlopeBias = 1.0						 # Pushes a caster's recorded depth away from the light in proportion to how steeply it is angled to it, measured in shadow map texels. Same trade as NormalBias, applied on the casting side instead.
+FilterRadius = 0.5					 # Width of the shadow map filter, in texels. Wider is steadier as the sun moves, at the cost of softer shadow edges. Measured in texels, so distant cascades are filtered proportionally more, which is where they need it.
+TemporalFilter = true				 # Reuse the previous frame's shadow where it still describes the same surface. The sun moves the shadow map far too slowly to see, but fast enough to re-quantise every shadow edge each frame, so almost all of the frame to frame change is noise and averaging it away costs nothing real.
+TemporalWeight = 0.9				 # [0.0-0.95] How much of the previous frame to keep. Higher is steadier and slower to react; shadows cast by moving things will trail if pushed too far. This is a per frame weight, so the time it settles over depends on framerate - lower it if you run well below 60.
+EVSMExponent = 5.54					 # Strength of the exponential depth warp. Clamped to 5.54 on a 16 bit shadow format, 42 on 32 bit. Stronger suppresses light bleeding on its own, but past a point the filtering degrades into a max filter and shadows start disappearing, so raise it in small steps.
+LightBleedScale = 1.0				 # [0.0-1.0] Scales how hard light bleeding is suppressed. Suppression also amplifies any instability in the shadow test, most of all on the furthest cascade. Lowering trades some light leaking through thin geometry for steadier distant shadows.
 
 [_Shaders.ShadowsExteriors.Ortho]
 Resolution = 2						 # Resolution of the texture used to store the ortho map. 0: 128, 1: 256, 2: 512, 3: 1024, 4: 2048

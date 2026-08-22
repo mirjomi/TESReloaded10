@@ -50,6 +50,12 @@ public:
 		D3DXVECTOR4		ShadowLightPosition[ShadowCubeMapsMax];
 		D3DXVECTOR4		ShadowMapRadius;
 		D3DXVECTOR4		ShadowBlur;
+		D3DXVECTOR4		BiasData;
+		D3DXVECTOR4		FilterData;
+		D3DXVECTOR4		TemporalData;	// x: enabled, y: history weight
+		D3DXVECTOR4		CameraDelta;	// xyz: current camera position minus the one the history was rendered from
+		D3DXMATRIX		PreviousViewProj;
+		D3DXMATRIX		PreviousViewTransform;
 	};
 
 	// Settings
@@ -99,6 +105,13 @@ public:
 		int					Anisotropy;
 		float				Distance;
 		float				CascadeLambda;
+		float				NormalBias;
+		float				SlopeBias;
+		float				FilterRadius;
+		float				LightBleedScale;
+		float				EVSMExponent;
+		bool				TemporalFilter;
+		float				TemporalWeight;
 	};
 
 	struct OrthoStruct {
@@ -166,6 +179,14 @@ public:
 		IDirect3DTexture9* ShadowSpotlightTexture[SpotLightsMax];
 		IDirect3DSurface9* ShadowSpotlightSurface[SpotLightsMax];
 		IDirect3DSurface9* ShadowCubeMapDepthSurface;
+		// Last frame's resolved shadow, plus the depth it was resolved at so the reprojection can
+		// tell whether the pixel it lands on is the same surface.
+		IDirect3DTexture9* ShadowHistoryTexture;
+		IDirect3DSurface9* ShadowHistorySurface;
+		IDirect3DTexture9* NormalsHistoryTexture;
+		IDirect3DSurface9* NormalsHistorySurface;
+		IDirect3DTexture9* DepthHistoryTexture;
+		IDirect3DSurface9* DepthHistorySurface;
 	};
 	ShadowTextures	Textures;
 
@@ -183,6 +204,7 @@ public:
 	IDirect3DSurface9* ShadowMapOrthoDepthSurface;
 
 	void		clearShadowsBuffer();
+	void		UpdateTemporalHistory();
 	void		UpdateConstants();
 	void		UpdateSettings();
 	void		RegisterConstants();
@@ -196,6 +218,8 @@ public:
 
 private:
 	bool		texturesInitialized;
+	bool		historyValid = false;
+	D3DXVECTOR4	historyCameraPosition = D3DXVECTOR4(0.0f, 0.0f, 0.0f, 0.0f);
 
 	bool		UpdateSettingsFromQuality(int quality);
 };
