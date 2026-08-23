@@ -153,10 +153,26 @@ float4 ComputeNormals(VSOUT IN) :COLOR0
 	// describe. No amount of filtering recovers one there, so the honest thing is to say so
 	// rather than average two unrelated surfaces and present the result as fact.
 	//
-	// Normalised by depth so one number means the same near and far. 1 is trustworthy, matching
-	// what this channel used to hold, so a reader that ignores it behaves exactly as before.
+	// Measured against the FIRST difference, not against depth. Dividing by depth looked
+	// reasonable and was useless: the error shrinks with distance, so the published number sat
+	// near 1 everywhere and only did anything once a consumer amplified it by ten. A plane has
+	// no second difference however steeply it recedes, so the ratio of the two is scale free:
+	//
+	//     plane            second 0,  first large   -> 0
+	//     dither of gap g  second 2g, first g       -> 2
+	//     silhouette step  second g,  first ~0      -> large
+	//
+	// Halved so that a dither pattern lands on zero confidence rather than twice past it, which
+	// puts a rejection of 1 at the calibrated point instead of somewhere a user has to find.
+	// The floor stops a surface facing the camera dead on, where both differences vanish, from
+	// dividing its way to nonsense.
+	//
+	// 1 is trustworthy, matching what this channel used to hold, so a reader that ignores it
+	// behaves exactly as before.
 	float planarError = max(min(he.x, he.y), min(ve.x, ve.y));
-	float confidence = 1.0 - saturate(planarError / max(depth, 1.0));
+	float localSlope = max(min(abs(H.x - depth), abs(H.y - depth)),
+	                       min(abs(V.x - depth), abs(V.y - depth)));
+	float confidence = 1.0 - saturate(0.5 * planarError / max(localSlope, depth * 0.0005));
 
 	return float4 (compress(viewNormal), confidence);
 }
@@ -173,7 +189,9 @@ float4 BlurNormals(VSOUT IN, uniform float2 OffsetMask) : COLOR0
 	// below weights a neighbour by how well its normal agrees with this one, which on a pixel
 	// frequency pattern rejects precisely the neighbours that disagree and so preserves it.
 	// Distrust should spread instead: a pixel surrounded by unreadable depth is not itself
-	// readable, and a grass clump wants one low confidence across it rather than a per pixel one.
+	// readable, and a grass clump wants one low confidence across it rather than a per pixel
+	// one. Only over the middle of the kernel though - at the full blur radius it reached far
+	// enough past a clump to reject the normals of the clean ground beside it.
 	float confidence = centre.a * 0.12f;
 	float confWeight = 0.12f;
 	float depth = readDepth(IN.UVCoord);
@@ -184,8 +202,10 @@ float4 BlurNormals(VSOUT IN, uniform float2 OffsetMask) : COLOR0
 		float2 uvOff = (BlurNormalsOffsets[i] * OffsetMask) * depthBasedRadius;
 		float4 neighbour = tex2D(TESR_NormalsBuffer, IN.UVCoord + uvOff);
 		float3 newNormal = expand(neighbour.rgb);
-		confidence += BlurNormalsWeights[i] * neighbour.a;
-		confWeight += BlurNormalsWeights[i];
+		if (i >= 8 && i < 16) {
+			confidence += BlurNormalsWeights[i] * neighbour.a;
+			confWeight += BlurNormalsWeights[i];
+		}
 		float depth2 = readDepth(IN.UVCoord + uvOff);
 		float useForBlur = abs(float(depth - depth2)) <= depthDrop;
 
