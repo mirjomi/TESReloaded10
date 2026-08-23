@@ -614,9 +614,21 @@ void ShadowManager::LoadShadowMapPixelShader(int mode, bool slopeBias) {
 	Template.Defines[0] = { "SHADOW_FIXED_MODE", ModeValue };
 	Template.Defines[1] = { "SHADOW_SLOPE_BIAS", BiasValue };
 
+	// Load before discarding. Deleting first and failing to replace leaves a null writer while
+	// ShadowShadersLoaded still says the shaders are fine, and the shadow pass then renders
+	// nothing into the atlas - which resolves as everything being occluded, so the frame goes
+	// black rather than losing shadows in any way that points at the cause. Keeping the old
+	// shader on failure costs one pointer and means the worst case is the previous storage mode
+	// rather than no shadows at all.
+	ShaderRecordPixel* replacement = (ShaderRecordPixel*)ShaderRecord::LoadShader("ShadowMap.pso", "Shadows\\", Template);
+	if (!replacement) {
+		Logger::Log("[ERROR]: Could not compile ShadowMap.pso for storage mode %d, keeping the shader already loaded.", mode);
+		return;
+	}
+
 	delete ShadowMapPixel;
-	ShadowMapPixel = (ShaderRecordPixel*)ShaderRecord::LoadShader("ShadowMap.pso", "Shadows\\", Template);
-	if (ShadowMapPixel) ShadowMapPixel->ClearSamplers = false;
+	ShadowMapPixel = replacement;
+	ShadowMapPixel->ClearSamplers = false;
 
 	CompiledShadowMode = mode;
 	CompiledSlopeBias = slopeBias ? 1 : 0;
