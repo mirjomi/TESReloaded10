@@ -196,7 +196,12 @@ bool ShadowsExteriorEffect::UpdateSettingsFromQuality(int quality) {
 		Settings.ShadowMaps.CascadeLambda = 0.9f;
 		Settings.ShadowMaps.LimitFrequency = 1;
 		Settings.ShadowMaps.MSAA = 1;
-		Settings.ShadowMaps.Prefilter = 1;
+		// Off, matching the toml default. Prefiltering hid the crawl in distant shadows by blurring
+		// away the detail that was crawling; the temporal filter removes the crawl without that, so
+		// this now buys softness and nothing else. It is not free either - measured at 6 fps of a
+		// 152 fps frame at 2048 cascades, because it is another full pass over a 4096 square atlas,
+		// and atlas sampling is what this pass is actually limited by.
+		Settings.ShadowMaps.Prefilter = 0;
 
 		switch (quality) {
 		case 0:
@@ -214,7 +219,14 @@ bool ShadowsExteriorEffect::UpdateSettingsFromQuality(int quality) {
 			break;
 		case 2:
 			Settings.ShadowMaps.Mode = 1;
-			Settings.ShadowMaps.FormatBits = 1;
+			// 16 bit, not 32. This was the only preset asking for a 32 bit atlas, and it paid twice
+			// for it. The exponent clamp below turns the 32 bit path into a max filter, which is why
+			// it drops shadows - and measured against the Full preset, which is the same atlas size
+			// and the same eight bytes per texel, this preset ran 8 fps slower despite a shorter
+			// shadow distance and a cheaper resolve. Same bytes, so that is filtering rate: fp32
+			// bilinear is not full speed on consumer hardware and this pass samples the atlas hard.
+			// G16R16F halves the traffic on top.
+			Settings.ShadowMaps.FormatBits = 0;
 			Settings.ShadowMaps.Distance = 4500.0f;
 			Settings.ShadowMaps.CascadeResolution = 2048;
 			break;
