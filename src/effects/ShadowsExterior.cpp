@@ -307,6 +307,9 @@ void ShadowsExteriorEffect::UpdateSettings() {
 	Constants.ScreenSpaceData.z = TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.ScreenSpace", "RenderDistance");
 	Constants.ScreenSpaceData.w = max(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.ScreenSpace", "Intensity"), 0.0f);
 
+	Constants.CompositeData.x = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.Main", "LegacyComposite");
+	Constants.CompositeData.y = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.Main", "LinearRatio");
+
 	// Sun smoothing settings.
 	Settings.SunSmoothing.SmoothSun = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.SunSmoothing", "SmoothSun");
 	Settings.SunSmoothing.QuantizeSun = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.SunSmoothing", "QuantizeSun");
@@ -454,6 +457,7 @@ void ShadowsExteriorEffect::RegisterConstants() {
 	TheShaderManager->RegisterConstant("TESR_ShadowCameraDelta", &Constants.CameraDelta);
 	TheShaderManager->RegisterConstant("TESR_ShadowPreviousViewProj", (D3DXVECTOR4*)&Constants.PreviousViewProj);
 	TheShaderManager->RegisterConstant("TESR_ShadowScreenSpaceData", &Constants.ScreenSpaceData);
+	TheShaderManager->RegisterConstant("TESR_ShadowComposite", &Constants.CompositeData);
 	TheShaderManager->RegisterConstant("TESR_OrthoData", &Constants.OrthoData);
 	TheShaderManager->RegisterConstant("TESR_ShadowFade", &Constants.ShadowFade);
 	TheShaderManager->RegisterConstant("TESR_ShadowRadius", &Constants.ShadowMapRadius);

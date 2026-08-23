@@ -9,6 +9,7 @@ float4 TESR_SkyColor;
 float4 TESR_SunAmbient;
 float4 TESR_SunColor;
 float4 TESR_SunDirection;
+float4 TESR_ShadowComposite; // x: use the legacy composite, y: build the ratio in linear space
 float4 TESR_ShadowScreenSpaceData;
 
 sampler2D TESR_RenderedBuffer : register(s0) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
@@ -84,9 +85,15 @@ float4 Shadow(VSOUT IN) : COLOR0
 	// it changes nothing - previously every shadowed pixel was darkened regardless of which way it
 	// faced. And shadowed surfaces end up the colour of the ambient by construction, which is what
 	// the sky tint blended in above was approximating.
-	float3 sunLight = TESR_SunColor.rgb * saturate(dot(world_normal, TESR_SunDirection.xyz));
-	float3 ambientLight = TESR_SunAmbient.rgb;
-	float3 shadowFactor = ambientLight / max(ambientLight + sunLight, 0.0001f);
+	//
+	// Whether the two terms should be linearised first depends on the space the object shaders
+	// summed them in, which differs between the vanilla shaders and NVR's replacements, so it is a
+	// setting rather than a guess. The ratio is less sensitive to this than an absolute operation
+	// would be, but it is not free of it.
+	float3 sunColor = TESR_ShadowComposite.y ? pows(TESR_SunColor.rgb, 2.2) : TESR_SunColor.rgb;
+	float3 ambColor = TESR_ShadowComposite.y ? pows(TESR_SunAmbient.rgb, 2.2) : TESR_SunAmbient.rgb;
+	float3 sunLight = sunColor * saturate(dot(world_normal, TESR_SunDirection.xyz));
+	float3 shadowFactor = ambColor / max(ambColor + sunLight, 0.0001f);
 
 	// DARKNESS is 1 minus the Darkness setting, so at Darkness 1 the shadow is the result above and
 	// anything lower lifts it back towards no shadow at all. There is deliberately no way to go
@@ -94,6 +101,26 @@ float4 Shadow(VSOUT IN) : COLOR0
 	shadowFactor = lerp(shadowFactor, 1.0f, DARKNESS);
 
 	float3 shading = lerp(shadowFactor, 1.0f, Shadow.r);
+
+	// The composite this replaced, kept switchable so the two can be compared in place. It darkens
+	// the pixel by the shadow amount whichever way the surface faces, then blends the result
+	// towards the sky colour to stop that reading as a grey wash.
+	[branch]
+	if (TESR_ShadowComposite.x) {
+		float legacy = lerp(0.0f, lerp(1.0f, luma(TESR_SunAmbient), DARKNESS * TESR_ShadowFade.z), Shadow.r);
+		legacy = saturate(lerp(DARKNESS, 1.0f, legacy));
+
+		float3 lin = pows(color.rgb, 2.2);
+		float3 sky = pows(TESR_SkyColor.rgb, 2.2);
+		float3 tinted = luma(lin) * legacy * sky;
+		tinted = lerp(tinted, lin * legacy, saturate(legacy + 0.5f));
+		color.rgb = pows(max(0.0f, tinted), 1.0f / 2.2f);
+
+#if viewshadows == 1
+		return float4(legacy.xxx, 1.0f);
+#endif
+		return float4(color.rgb, 1.0f);
+	}
 
 #if viewshadows == 1
 	return float4(shading, 1.0f);

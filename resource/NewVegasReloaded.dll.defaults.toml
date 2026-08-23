@@ -616,7 +616,9 @@ Enabled = true                       # Rain effect that is blocked by objects ab
 [_Shaders.ShadowsExteriors.Main]
 Quality = 4                          # Quality preset - 0: Low, 1: Medium, 2: High, 3: Full, 4: Custom
 Enabled = true                       # Enable sun shadows using rendered shadow maps.
-Darkness = 0.75                      # Darkness of shadows.
+Darkness = 0.75                      # How far a sun shadow goes towards the physically correct result, where the sun's contribution is removed and the surface is left lit by the ambient alone. 1 is that result, and there is nothing darker than it because the sun is by then entirely gone; lower values lift the shadow back towards no shadow at all. Note this is not the control it was before the composite changed - it used to be a floor on a flat multiplier applied to the whole pixel, so an old value will not reproduce an old look.
+LegacyComposite = false             # Revert to the previous way of applying sun shadows, which darkened the whole pixel by the shadow amount and then blended the result towards the sky colour so that darkening did not read as grey. It darkens surfaces the sun was never reaching, which is what replacing it fixed. Here to compare the two in place.
+LinearRatio = false                 # Build the shadow ratio from linearised sun and ambient rather than from the values as they arrive. Which is correct depends on the space the object shaders summed their lighting in, and that differs between the vanilla shaders and NVR's replacements. Try it if shadows look systematically too strong or too weak rather than merely not to taste.
 NightMinDarkness = 0.35              # Darkness of shadows during dark moon phase. Set to 0 to disable shadows completely when there is no moon.
 OrthoMapResolution = 256             # Resolution of the texture used to store the ortho map.
 OrthoRadius = 8000                   # Max distance for rendering of ortho map.
