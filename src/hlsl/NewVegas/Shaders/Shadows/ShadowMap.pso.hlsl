@@ -60,19 +60,35 @@ PS_OUTPUT main(VS_OUTPUT IN) {
 	// extent, so one texel of lateral distance is exactly TESR_ShadowBiasData.z in depth units.
 	// That is what the clamp is expressed in - a silhouette puts two different surfaces in one
 	// derivative quad and the raw gradient there is meaningless, so the bias has to be bounded.
+	// VSM also needs the gradient for the intra texel spread below, so it is still taken there when
+	// the slope bias is compiled out. EVSM has no other use for it and drops the ddx/ddy pair.
+#if SHADOW_SLOPE_BIAS || SHADOW_FIXED_MODE == 0
 	float2 depthGradient = float2(ddx(depth), ddy(depth));
+#endif
+#if SHADOW_SLOPE_BIAS
 	float slopeBias = min(TESR_ShadowBiasData.y * length(depthGradient), 8.0f * TESR_ShadowBiasData.z);
+#else
+	const float slopeBias = 0.0f;
+#endif
 
 	// Larger depth is further from the light (near plane 0, far plane at the far side of the
 	// cascade), and the resolve treats a receiver as lit when its depth is at most the stored
 	// one, so adding the bias is what moves the caster out of its own way.
 	float biasedDepth = saturate(depth + slopeBias);
 
-	// TESR_ShadowFormatData.x : shadow mode
+	// The storage mode is resolved at compile time by SHADOW_FIXED_MODE rather than branched on
+	// here: ps_3_0 flattens a branch on a constant register, so every fragment paid for all three
+	// layouts. ShadowManager reloads this shader when the mode changes, which is the only reason
+	// baking it in is safe - see SyncShadowMapShader.
+	//
+	// TESR_ShadowData.z stays a runtime test. It is 0 for the sun cascades, 1 for the ortho map and
+	// the light radius while rendering point light cube and spot maps, and the last two want plain
+	// depth rather than moments - one shader serves all three.
 	// 0: VSM
 	// 1: EVSM2
 	// 2: EVSM4
-    if (TESR_ShadowFormatData.x == 0.0f && !TESR_ShadowData.z) {
+#if SHADOW_FIXED_MODE == 0
+    if (!TESR_ShadowData.z) {
 		// VSM
 		// Cheat to reduce shadow acne in variance maps. The spread is a property of the surface,
 		// so it is taken from the unbiased gradient.
@@ -81,7 +97,8 @@ PS_OUTPUT main(VS_OUTPUT IN) {
         float moment2 = biasedDepth * biasedDepth + 0.25 * (dx * dx + dy * dy);
         OUT.color_0 = float4(biasedDepth, moment2, 0.0f, 1.0f);
     }
-    else if (TESR_ShadowFormatData.x == 1.0f && !TESR_ShadowData.z) {
+#elif SHADOW_FIXED_MODE == 1
+    if (!TESR_ShadowData.z) {
 		// EVSM2
 		// NOTE: this layout looks wrong and is left alone only because it is not the default.
 		// It writes (pos, neg), but GetLightAmountValueEVSM2 hands .xy straight to
@@ -93,7 +110,8 @@ PS_OUTPUT main(VS_OUTPUT IN) {
         float2 evsm2 = WarpDepth(biasedDepth, exponents);
         OUT.color_0 = float4(evsm2, 0.0f, 1.0f);
     }
-    else if (TESR_ShadowFormatData.x == 2.0f && !TESR_ShadowData.z) {
+#else
+    if (!TESR_ShadowData.z) {
 		// EVSM4
         float2 exponents = GetEVSMExponents(TESR_ShadowFormatData.w, 5.0f);
         float2 evsm2 = WarpDepth(biasedDepth, exponents);
@@ -109,6 +127,7 @@ PS_OUTPUT main(VS_OUTPUT IN) {
 
         OUT.color_0 = float4(evsm2, moment2);
     }
+#endif
     else {
 		// Only depth.
 		OUT.color_0 = float4(depth, 0.0f, 0.0f, 1.0f);

@@ -17,7 +17,7 @@ void ShadowManager::Initialize() {
 
 	// load the shaders
 	TheShadowManager->ShadowMapVertex = (ShaderRecordVertex*)ShaderRecord::LoadShader("ShadowMap.vso", "Shadows\\");
-	TheShadowManager->ShadowMapPixel = (ShaderRecordPixel*)ShaderRecord::LoadShader("ShadowMap.pso", "Shadows\\");
+	TheShadowManager->SyncShadowMapShader(); // loads ShadowMap.pso for the configured storage mode
 	TheShadowManager->ShadowCubeMapVertex = (ShaderRecordVertex*)ShaderRecord::LoadShader("ShadowCubeMap.vso", "Shadows\\");
 	TheShadowManager->ShadowCubeMapPixel = (ShaderRecordPixel*)ShaderRecord::LoadShader("ShadowCubeMap.pso", "Shadows\\");
 
@@ -588,6 +588,42 @@ void ShadowManager::RecalculateBillboardVectors(D3DXVECTOR3* SunDir) {
 /*
 * Renders the different shadow maps: Near, Far, Ortho.
 */
+// ShadowMap.pso is compiled for one storage mode, so it has to be rebuilt when that changes.
+// Driving it from the settings every frame rather than from a change notification means the two
+// cannot drift apart: a mode change that failed to signal would otherwise leave the writer
+// emitting one layout while the resolve read another, which is silent and looks like the shadows
+// simply being wrong. Two integer comparisons per frame buys that.
+void ShadowManager::SyncShadowMapShader() {
+	ShadowsExteriorEffect::ShadowMapStruct* Maps = &TheShaderManager->Effects.ShadowsExteriors->Settings.ShadowMaps;
+	int mode = Maps->Mode;
+	int slopeBias = Maps->SlopeBias > 0.0f;
+
+	if (mode == CompiledShadowMode && slopeBias == CompiledSlopeBias) return;
+	LoadShadowMapPixelShader(mode, slopeBias != 0);
+}
+
+
+void ShadowManager::LoadShadowMapPixelShader(int mode, bool slopeBias) {
+	// D3DXMACRO holds pointers, so these have to outlive the LoadShader call.
+	static char ModeValue[4];
+	static char BiasValue[4];
+	sprintf_s(ModeValue, "%d", mode);
+	sprintf_s(BiasValue, "%d", slopeBias ? 1 : 0);
+
+	ShaderTemplate Template = ShaderTemplate{};
+	Template.Defines[0] = { "SHADOW_FIXED_MODE", ModeValue };
+	Template.Defines[1] = { "SHADOW_SLOPE_BIAS", BiasValue };
+
+	delete ShadowMapPixel;
+	ShadowMapPixel = (ShaderRecordPixel*)ShaderRecord::LoadShader("ShadowMap.pso", "Shadows\\", Template);
+	if (ShadowMapPixel) ShadowMapPixel->ClearSamplers = false;
+
+	CompiledShadowMode = mode;
+	CompiledSlopeBias = slopeBias ? 1 : 0;
+	Logger::Log("Compiled ShadowMap.pso for storage mode %d, slope bias %d", mode, slopeBias ? 1 : 0);
+}
+
+
 void ShadowManager::RenderShadowMaps() {
 	if (!TheSettingManager->SettingsMain.Main.RenderEffects) return; // cancel out if rendering effects is disabled
 
@@ -610,6 +646,8 @@ void ShadowManager::RenderShadowMaps() {
 	if (!ExteriorEnabled && !InteriorEnabled && !TheShaderManager->orthoRequired || !ShadowShadersLoaded) {
 		return;
 	}
+
+	SyncShadowMapShader();
 	if (!Player->parentCell) return;
 
 	auto timer = TimeLogger();

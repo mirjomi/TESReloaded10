@@ -54,6 +54,15 @@ public:
 	int						PointLightsNum;
 	float					shadowMapsRenderTime;
 	bool					ShadowShadersLoaded;
+
+	// ShadowMap.pso bakes the storage mode and whether the slope bias exists into the compiled
+	// shader. What it was built with is recorded here rather than re-derived from the settings, so
+	// SyncShadowMapShader can compare the two and reload when they no longer agree. -1 forces the
+	// first load.
+	int						CompiledShadowMode = -1;
+	int						CompiledSlopeBias = -1;
+	void					LoadShadowMapPixelShader(int mode, bool slopeBias);
+	void					SyncShadowMapShader();
 	int						FrameCounter;
 
 private:
