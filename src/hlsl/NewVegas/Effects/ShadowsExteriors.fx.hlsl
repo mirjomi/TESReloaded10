@@ -9,7 +9,7 @@ float4 TESR_SkyColor;
 float4 TESR_SunAmbient;
 float4 TESR_SunColor;
 float4 TESR_SunDirection;
-float4 TESR_ShadowComposite; // x: use the legacy composite, y: build the ratio in linear space
+float4 TESR_ShadowComposite; // x: use the legacy composite
 float4 TESR_ShadowScreenSpaceData;
 
 sampler2D TESR_RenderedBuffer : register(s0) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
@@ -86,14 +86,11 @@ float4 Shadow(VSOUT IN) : COLOR0
 	// faced. And shadowed surfaces end up the colour of the ambient by construction, which is what
 	// the sky tint blended in above was approximating.
 	//
-	// Whether the two terms should be linearised first depends on the space the object shaders
-	// summed them in, which differs between the vanilla shaders and NVR's replacements, so it is a
-	// setting rather than a guess. The ratio is less sensitive to this than an absolute operation
-	// would be, but it is not free of it.
-	float3 sunColor = TESR_ShadowComposite.y ? pows(TESR_SunColor.rgb, 2.2) : TESR_SunColor.rgb;
-	float3 ambColor = TESR_ShadowComposite.y ? pows(TESR_SunAmbient.rgb, 2.2) : TESR_SunAmbient.rgb;
-	float3 sunLight = sunColor * saturate(dot(world_normal, TESR_SunDirection.xyz));
-	float3 shadowFactor = ambColor / max(ambColor + sunLight, 0.0001f);
+	// The terms are used as they arrive rather than linearised first. This pass runs on the frame
+	// after the game's own tone mapping, and the constants share that encoding, so a pow on only
+	// one side of the comparison pulls the two apart - which is what it looked like when tried.
+	float3 sunLight = TESR_SunColor.rgb * saturate(dot(world_normal, TESR_SunDirection.xyz));
+	float3 shadowFactor = TESR_SunAmbient.rgb / max(TESR_SunAmbient.rgb + sunLight, 0.0001f);
 
 	// DARKNESS is 1 minus the Darkness setting, so at Darkness 1 the shadow is the result above and
 	// anything lower lifts it back towards no shadow at all. There is deliberately no way to go
