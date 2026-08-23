@@ -142,22 +142,50 @@ float4 ComputeNormals(VSOUT IN) :COLOR0
 	// half3 viewNormal = normalize(cross(hDeriv, vDeriv));
 	float3 viewNormal = normalize(cross(vDeriv, hDeriv));
 
-	return float4 (compress(viewNormal), 1.0);
+	// How far this pixel's depth can be trusted to describe a surface, published in the alpha
+	// channel, which nothing was using and which held a constant 1.
+	//
+	// he and ve are second differences: how far the depth two pixels out misses the line through
+	// this pixel and its neighbour. On any plane that is near zero however steeply it recedes,
+	// and it is large wherever depth is not locally planar. That covers silhouettes, and it
+	// covers the case this was added for - alpha tested foliage, where depth alternates between
+	// blade and ground at pixel frequency and there is no single surface for a normal to
+	// describe. No amount of filtering recovers one there, so the honest thing is to say so
+	// rather than average two unrelated surfaces and present the result as fact.
+	//
+	// Normalised by depth so one number means the same near and far. 1 is trustworthy, matching
+	// what this channel used to hold, so a reader that ignores it behaves exactly as before.
+	float planarError = max(min(he.x, he.y), min(ve.x, ve.y));
+	float confidence = 1.0 - saturate(planarError / max(depth, 1.0));
+
+	return float4 (compress(viewNormal), confidence);
 }
  
 
 float4 BlurNormals(VSOUT IN, uniform float2 OffsetMask) : COLOR0
 {
 	float WeightSum = 0.12f * saturate(1 - dropTreshold);
-	float3 normal = expand(tex2D(TESR_NormalsBuffer, IN.UVCoord).rgb);
+	float4 centre = tex2D(TESR_NormalsBuffer, IN.UVCoord);
+	float3 normal = expand(centre.rgb);
 	float3 finalNormal = normal * WeightSum;
+
+	// Confidence is blurred with the plain kernel, not the normal's edge aware one. The gating
+	// below weights a neighbour by how well its normal agrees with this one, which on a pixel
+	// frequency pattern rejects precisely the neighbours that disagree and so preserves it.
+	// Distrust should spread instead: a pixel surrounded by unreadable depth is not itself
+	// readable, and a grass clump wants one low confidence across it rather than a per pixel one.
+	float confidence = centre.a * 0.12f;
+	float confWeight = 0.12f;
 	float depth = readDepth(IN.UVCoord);
 	float depthBasedRadius = abs(log(depth/farZ)) * blurRadius;
 	float depthDrop = (depth/farZ) * 7000; // difference of depth beyond which the sample will not count towards the blur
 
 	for (int i = 0; i < KernelSize; i++) {
 		float2 uvOff = (BlurNormalsOffsets[i] * OffsetMask) * depthBasedRadius;
-		float3 newNormal = expand(tex2D(TESR_NormalsBuffer, IN.UVCoord + uvOff).rgb);
+		float4 neighbour = tex2D(TESR_NormalsBuffer, IN.UVCoord + uvOff);
+		float3 newNormal = expand(neighbour.rgb);
+		confidence += BlurNormalsWeights[i] * neighbour.a;
+		confWeight += BlurNormalsWeights[i];
 		float depth2 = readDepth(IN.UVCoord + uvOff);
 		float useForBlur = abs(float(depth - depth2)) <= depthDrop;
 
@@ -168,7 +196,7 @@ float4 BlurNormals(VSOUT IN, uniform float2 OffsetMask) : COLOR0
 	}
 	
 	finalNormal /= WeightSum;
-    return float4(compress(finalNormal), 1.0f);
+    return float4(compress(finalNormal), confidence / confWeight);
 }
 
 

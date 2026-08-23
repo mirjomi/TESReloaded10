@@ -308,6 +308,7 @@ void ShadowsExteriorEffect::UpdateSettings() {
 	Constants.ScreenSpaceData.w = max(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.ScreenSpace", "Intensity"), 0.0f);
 
 	Constants.CompositeData.x = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.Main", "CompositeMode");
+	Constants.CompositeData.y = max(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.Main", "NormalRejection"), 0.0f);
 
 	// Sun smoothing settings.
 	Settings.SunSmoothing.SmoothSun = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.SunSmoothing", "SmoothSun");
