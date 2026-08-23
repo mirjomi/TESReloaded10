@@ -42,7 +42,6 @@ public:
 		D3DXVECTOR4		FormatData;
 		D3DXVECTOR4		ScreenSpaceData;
 		D3DXVECTOR4		CompositeData;	// x: composite mode, y: normal distrust, z: skylighting, w: sun tint
-		D3DXVECTOR4		SkyOcclusionData;	// x: strength, y: ring radius, z: thickness
 		D3DXVECTOR4		OrthoData;
 		D3DXVECTOR4		ShadowFade;
 		D3DXMATRIXA16	ShadowWorld;
