@@ -267,7 +267,10 @@ bool ShadowsExteriorEffect::UpdateSettingsFromQuality(int quality) {
 			ShadowMap->ClearColor = D3DXVECTOR4(1.0f, 1.0f, 0.0f, 1.0f);
 			break;
 		case 1:
-			ShadowMap->ClearColor = D3DXVECTOR4(pos, neg, 0.0f, 1.0f);
+			// (pos, pos^2), matching what ShadowMap.pso writes for EVSM2. An unwritten texel has to
+			// read as the far plane, and it has to be a consistent moment pair or the variance at the
+			// edge of a cascade is meaningless.
+			ShadowMap->ClearColor = D3DXVECTOR4(pos, pos * pos, 0.0f, 1.0f);
 			ShadowMap->CustomClearRequired = true;
 			break;
 		case 2:
