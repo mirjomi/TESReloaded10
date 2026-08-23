@@ -89,9 +89,22 @@ float4 Shadow(VSOUT IN) : COLOR0
 	// The terms are used as they arrive rather than linearised first. This pass runs on the frame
 	// after the game's own tone mapping, and the constants share that encoding, so a pow on only
 	// one side of the comparison pulls the two apart - which is what it looked like when tried.
+	// The normals buffer is not read from geometry - Normals.fx reconstructs it from depth with a
+	// cross product of screen derivatives. Alpha tested foliage under DXVK's coverage dither writes
+	// a depth checkerboard, so over grass that reconstruction alternates per pixel, and feeding it
+	// to the ratio turned an alpha pattern into a brightness one.
+	//
+	// Sampling half a texel off centre makes the bilinear filter average an exact two by two block,
+	// and a two by two block of a checkerboard holds two of each phase, so the pattern cancels
+	// outright rather than being attenuated. A four tap cross would not have: the four neighbours
+	// of a checkerboard cell are all the opposite phase, which is the trap this codebase has walked
+	// into twice before. It costs one offset and no extra taps, and the ratio is a low frequency
+	// quantity that does not need its normal placed to the pixel.
+	float3 ratioNormal = GetWorldNormal(uv + 0.5f * TESR_ReciprocalResolution.xy);
+
 	// Mode 2 forces the normal term to 1, which is the only input the ratio takes that the path it
 	// replaced did not. If an artefact survives that, the normal is not what is producing it.
-	float NdotL = (TESR_ShadowComposite.x == 2.0f) ? 1.0f : saturate(dot(world_normal, TESR_SunDirection.xyz));
+	float NdotL = (TESR_ShadowComposite.x == 2.0f) ? 1.0f : saturate(dot(ratioNormal, TESR_SunDirection.xyz));
 	float3 sunLight = TESR_SunColor.rgb * NdotL;
 	float3 shadowFactor = TESR_SunAmbient.rgb / max(TESR_SunAmbient.rgb + sunLight, 0.0001f);
 
@@ -107,7 +120,9 @@ float4 Shadow(VSOUT IN) : COLOR0
 	[branch]
 	if (TESR_ShadowComposite.x == 3.0f) return float4(shading, 1.0f);
 	[branch]
-	if (TESR_ShadowComposite.x == 4.0f) return float4(world_normal * 0.5f + 0.5f, 1.0f);
+	if (TESR_ShadowComposite.x == 4.0f) return float4(ratioNormal * 0.5f + 0.5f, 1.0f);
+	[branch]
+	if (TESR_ShadowComposite.x == 5.0f) return float4(world_normal * 0.5f + 0.5f, 1.0f);
 
 	// The composite this replaced, kept switchable so the two can be compared in place. It darkens
 	// the pixel by the shadow amount whichever way the surface faces, then blends the result
