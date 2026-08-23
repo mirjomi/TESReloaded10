@@ -627,6 +627,7 @@ UsePointShadowsNight = false         # Whether to cast shadows from point lights
 
 [_Shaders.ShadowsExteriors.Skylighting]
 Scale = 0.35                         # [0.0-1.0] How far the flat weather ambient is replaced by a directional one taken from the sky. The weather gives every surface the same ambient colour whichever way it faces, while the real sky does not: up sees the zenith, sideways sees the lower sky and horizon, down sees bounce off the ground. This does not ADD light. The gradient is rescaled to carry the same luminance as the flat ambient it replaces, so raising it moves light between orientations and cannot brighten the scene, which is why it needs no brightness control to undo one. 0 is the flat ambient exactly. Ships around a third because the weather ambient is an artistic warm value and replacing all of it with sky colour is a strong look even when the maths is right.
+SunTint = 0.5                        # [0.0-1.0] How far the sky ambient leans towards the sun's own colour on surfaces facing it. The sky scatters forward, so it runs warmer near the sun and cooler away from it, and a purely vertical gradient cannot express that - without this, two walls facing opposite directions get an identical ambient. Hue only: the tint is renormalised to the untinted luminance, so like Scale it cannot brighten anything. 0 is the plain vertical gradient. Most visible when the sun is low.
 
 [_Shaders.ShadowsExteriors.SunSmoothing]
 SmoothSun = 1						 # Smooth the sun rotation by interpolating between positions.

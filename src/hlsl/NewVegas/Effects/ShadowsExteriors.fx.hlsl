@@ -11,7 +11,7 @@ float4 TESR_HorizonColor;
 float4 TESR_SunAmbient;
 float4 TESR_SunColor;
 float4 TESR_SunDirection;
-float4 TESR_ShadowComposite; // x: composite mode, y: how hard to distrust an unreadable normal, z: skylighting
+float4 TESR_ShadowComposite; // x: composite mode, y: normal distrust, z: skylighting, w: sun tint
 float4 TESR_ShadowScreenSpaceData;
 
 sampler2D TESR_RenderedBuffer : register(s0) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
@@ -164,10 +164,12 @@ float4 Shadow(VSOUT IN) : COLOR0
 	// mean a surface could end up with more ambient than it started with, and this effect not
 	// being able to brighten the scene is the property the whole design rests on. Renormalising
 	// to the untinted luminance keeps it a redistribution of colour rather than of light.
-	static const float SunTint = 0.5f;
-	float sunFacing = saturate(dot(ratioNormal, TESR_SunDirection.xyz));
-	float3 tinted = lerp(skyAverage, TESR_SunColor.rgb, sunFacing * SunTint);
-	skyAverage = tinted * (luma(skyAverage) / max(luma(tinted), 0.0001f));
+	[branch]
+	if (TESR_ShadowComposite.w > 0.0f) {
+		float sunFacing = saturate(dot(ratioNormal, TESR_SunDirection.xyz));
+		float3 tinted = lerp(skyAverage, TESR_SunColor.rgb, sunFacing * TESR_ShadowComposite.w);
+		skyAverage = tinted * (luma(skyAverage) / max(luma(tinted), 0.0001f));
+	}
 
 	// Where the normal is unreadable this falls back to the orientation it cannot determine, not
 	// to no skylighting at all. Falling back to the flat weather ambient was the first attempt
