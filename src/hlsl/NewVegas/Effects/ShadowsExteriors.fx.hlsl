@@ -58,15 +58,24 @@ struct VSIN
 // how much of the hemisphere is blocked. It is still blind to walls that reach no higher than the
 // point itself - a narrow alley reads as open - so this is the complement of what SSAO gets right,
 // not a replacement for it.
-float GetSkyVisibility(float3 cameraRelativePos, float viewDistance) {
+// WetWorld, Snow and SnowAccumulation all reach the ortho map the same way, and the first
+// attempt here did not: it fed a position built from toWorld times linear depth, and divided
+// by w before reading z. Both are reasonable and neither is what the ortho transform was
+// built against. This now matches the three shipped users exactly - reconstructWorldPosition
+// in, ScreenCoordToTexCoord for the xy, and the UNDIVIDED z compared against the map.
+float2 OrthoToTexCoord(float4 coord) {
+	float2 uv = coord.xy / coord.w;
+	return float2(uv.x * 0.5f + 0.5f, uv.y * -0.5f + 0.5f);
+}
+
+float GetSkyVisibility(float4 worldPosRel, float viewDistance) {
 	// tex2Dlod below, not tex2D: a gradient instruction inside forced flow control is X3528 in
 	// ps_3_0, and this early out is worth keeping. The ortho map has no mipmaps, so LOD 0 is exact.
 	[branch]
 	if (TESR_SkyOcclusionData.x <= 0.0f) return 1.0f;
 
-	float4 orthoPos = mul(float4(cameraRelativePos, 1.0f), TESR_ShadowCameraToLightTransformOrtho);
-	orthoPos.xyz /= orthoPos.w;
-	float2 orthoUv = float2(orthoPos.x * 0.5f + 0.5f, orthoPos.y * -0.5f + 0.5f);
+	float4 orthoPos = mul(worldPosRel, TESR_ShadowCameraToLightTransformOrtho);
+	float2 orthoUv = OrthoToTexCoord(orthoPos);
 
 	// Nothing is recorded outside the map, and guessing there would put a hard edge in the middle
 	// of the view. Absent information means open sky.
@@ -247,7 +256,9 @@ float4 Shadow(VSOUT IN) : COLOR0
 	// Occlusion belongs on the ambient and nowhere else. The shadow says the sun is blocked;
 	// this says the sky is. Applying it to the whole pixel, which is what a screen space AO
 	// pass does further down the chain, also darkens light arriving straight from the sun.
-	ambientDir *= GetSkyVisibility(camera_vector, uniformDepth);
+	float orthoDepthUnused;
+	float4 orthoWorldPos = reconstructWorldPosition(uv, orthoDepthUnused);
+	ambientDir *= GetSkyVisibility(orthoWorldPos, uniformDepth);
 
 	// One expression for both. The sun is attenuated by visibility, the ambient is replaced by
 	// its directional form, and the whole thing is divided by what the pixel was lit by. With no
@@ -273,7 +284,20 @@ float4 Shadow(VSOUT IN) : COLOR0
 	[branch]
 	if (TESR_ShadowComposite.x == 7.0f) return float4(ambientDir, 1.0f);
 	[branch]
-	if (TESR_ShadowComposite.x == 8.0f) return float4(GetSkyVisibility(camera_vector, uniformDepth).xxx, 1.0f);
+	if (TESR_ShadowComposite.x == 8.0f) return float4(GetSkyVisibility(orthoWorldPos, uniformDepth).xxx, 1.0f);
+
+	// 9 and 10 exist because the first version of the lookup was wrong in a way the result could
+	// not distinguish: a bad projection and a missing map both read as everything occluded.
+	[branch]
+	if (TESR_ShadowComposite.x == 9.0f) {
+		float4 op = mul(orthoWorldPos, TESR_ShadowCameraToLightTransformOrtho);
+		return float4(tex2Dlod(TESR_OrthoMapBuffer, float4(OrthoToTexCoord(op), 0.0f, 0.0f)).rrr, 1.0f);
+	}
+	[branch]
+	if (TESR_ShadowComposite.x == 10.0f) {
+		float4 op = mul(orthoWorldPos, TESR_ShadowCameraToLightTransformOrtho);
+		return float4(OrthoToTexCoord(op), op.z, 1.0f);
+	}
 
 	// The composite this replaced, kept switchable so the two can be compared in place. It darkens
 	// the pixel by the shadow amount whichever way the surface faces, then blends the result
