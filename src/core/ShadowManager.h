@@ -15,8 +15,14 @@ public:
 
 
 	NiNode*					GetRefNode(TESObjectREFR* Ref, ShadowsExteriorEffect::FormsStruct* Forms);
+	static bool				IsRefracting(TESObjectREFR* Ref);
 	void					AccumChildren(NiAVObject* NiObject, ShadowsExteriorEffect::FormsStruct* Forms, bool isLand, bool isLOD, NiFrustumPlanes* arPlanes = nullptr);
-	void					AccumObject(std::stack<NiAVObject*>* containersAccum, NiAVObject* NiObject, ShadowsExteriorEffect::FormsStruct* Forms, bool isLODLand);
+	void					AccumObject(std::vector<NiAVObject*>* containersAccum, NiAVObject* NiObject, ShadowsExteriorEffect::FormsStruct* Forms, bool isLODLand);
+
+	// Reused by AccumChildren instead of a fresh container per call. AccumChildren runs once per
+	// reference per cascade, it is iterative rather than recursive, and the shadow pass is single
+	// threaded, so one buffer held here is enough. clear() keeps the capacity between calls.
+	std::vector<NiAVObject*>	ContainerStack;
 	void					RenderAccums();
 	void					RenderShadowMap(ShadowsExteriorEffect::ShadowMapSettings* ShadowMap, D3DXMATRIX* ViewProj);
 	void					AccumExteriorCell(TESObjectCELL* Cell, ShadowsExteriorEffect::ShadowMapSettings* ShadowMap);

@@ -55,12 +55,14 @@ void ShadowManager::Initialize() {
 NiNode* ShadowManager::GetRefNode(TESObjectREFR* Ref, ShadowsExteriorEffect::FormsStruct* Forms) {
 	
 	if (!Ref) return NULL;
-	NiNode* Node = Ref->GetNode();
 
-	if (!Node) return NULL;
+	// Cheapest tests first. The flag lives on the reference itself and the form type is one
+	// dereference away, while GetNode is a virtual call - so rejecting on those before making it
+	// keeps the call off the path for every reference that was going to be rejected anyway.
 	if (Ref->flags & TESForm::FormFlags::kFormFlags_NotCastShadows) return NULL;
 
 	TESForm* Form = Ref->baseForm;
+	if (!Form) return NULL;
 	UInt8 TypeID = Form->formType;
 	switch (TypeID) {
 	case TESForm::FormType::kFormType_Land:
@@ -105,11 +107,17 @@ NiNode* ShadowManager::GetRefNode(TESObjectREFR* Ref, ShadowsExteriorEffect::For
 		break;
 	}
 
+	return Ref->GetNode();
+}
+
+
+// Walks the reference's extra data list, which makes it far more expensive than anything in
+// GetRefNode. Callers run it only once a reference has passed its visibility test, so a cell's
+// worth of off-screen references never pay for it.
+bool ShadowManager::IsRefracting(TESObjectREFR* Ref) {
 	ExtraRefractionProperty* RefractionExtraProperty = (ExtraRefractionProperty*)Ref->extraDataList.GetExtraData(BSExtraData::ExtraDataType::kExtraData_RefractionProperty);
 	float Refraction = RefractionExtraProperty ? (1 - RefractionExtraProperty->refractionAmount) : 0.0f;
-	if (Refraction >= 0.5) return NULL;
-
-	return Node;
+	return Refraction >= 0.5f;
 }
 
 
@@ -128,8 +136,7 @@ bool ShadowManager::CheckShaderFlags(NiGeometry* Geometry) {
 
 
 // Detect which pass the object must be added to
-void ShadowManager::AccumObject(std::stack<NiAVObject*>* containersAccum, NiAVObject* NiObject, ShadowsExteriorEffect::FormsStruct* Forms, bool isLODLand) {
-	auto timelog = TimeLogger();
+void ShadowManager::AccumObject(std::vector<NiAVObject*>* containersAccum, NiAVObject* NiObject, ShadowsExteriorEffect::FormsStruct* Forms, bool isLODLand) {
 
 	NiGeometry* geo = static_cast<NiGeometry*>(NiObject);
 	if (!geo->shader) return; // skip Geometry without a shader
@@ -147,7 +154,6 @@ void ShadowManager::AccumObject(std::stack<NiAVObject*>* containersAccum, NiAVOb
 	else if (Forms->AlphaEnabled && alphaPass->AccumObject(geo)) {}
 	else geometryPass->AccumObject(geo);
 
-	//timelog.LogTime("ShadowManager::AccumObject");
 }
 
 
@@ -155,22 +161,25 @@ void ShadowManager::AccumObject(std::stack<NiAVObject*>* containersAccum, NiAVOb
 void ShadowManager::AccumChildren(NiAVObject* NiObject, ShadowsExteriorEffect::FormsStruct* Forms, bool isLand, bool isLOD, NiFrustumPlanes *arPlanes) {
 	if (!NiObject) return;
 
-	std::stack<NiAVObject*> containers;
+	// See ContainerStack in the header: reused rather than allocated per call.
+	std::vector<NiAVObject*>& containers = ContainerStack;
+	containers.clear();
+
 	NiAVObject* child;
 	NiAVObject* object;
 	NiNode* Node;
 
 	//list all objects contained, or sort the object if not a container
 	if (!NiObject->IsGeometry())
-		containers.push(NiObject);
+		containers.push_back(NiObject);
 	else
 		AccumObject(&containers, NiObject, Forms, isLand && isLOD);
 		
 
 	// Gather geometry
 	while (!containers.empty()) {
-    	object = containers.top();
-    	containers.pop();
+    	object = containers.back();
+    	containers.pop_back();
 
 		if (!object) continue;
 
@@ -186,7 +195,7 @@ void ShadowManager::AccumChildren(NiAVObject* NiObject, ShadowsExteriorEffect::F
 
 			child = Node->m_children.data[SwitchNode->m_iIndex];
 			if (!child->IsGeometry())
-				containers.push(child);
+				containers.push_back(child);
 			else
 				AccumObject(&containers, child, Forms, false);
 			continue;
@@ -207,7 +216,7 @@ void ShadowManager::AccumChildren(NiAVObject* NiObject, ShadowsExteriorEffect::F
 
 			if (child->IsFadeNode() && static_cast<BSFadeNode*>(child)->FadeAlpha < 0.75f) continue; // stop rendering fadenodes below a certain opacity
 			if (!child->IsGeometry())
-				containers.push(child);
+				containers.push_back(child);
 			else
 				AccumObject(&containers, child, Forms, isLand && isLOD);
 		}
@@ -288,7 +297,7 @@ void ShadowManager::AccumExteriorCell(TESObjectCELL* Cell, ShadowsExteriorEffect
 			continue;
 		}
 
-		if (RefNode && RefNode->WithinFrustum(&ShadowMap->ShadowMapFrustumPlanes))
+		if (RefNode->WithinFrustum(&ShadowMap->ShadowMapFrustumPlanes) && !IsRefracting(Entry->item))
 			AccumChildren(RefNode, &ShadowMap->Forms, false, false, &ShadowMap->ShadowMapFrustumPlanes);
 
 		Entry = Entry->next;
@@ -350,7 +359,7 @@ void ShadowManager::RenderShadowSpotlight(NiSpotLight** Lights, UInt32 LightInde
 
 		D3DXVec3Normalize(&ObjectToLight, &ObjectToLight);
 		bool inFront = D3DXVec3Dot(&ObjectToLight, &CameraDirection) > 0;
-		if (inFront && RefNode->GetDistance(LightPos) <= Radius + RefNode->GetWorldBoundRadius()) 
+		if (inFront && RefNode->GetDistance(LightPos) <= Radius + RefNode->GetWorldBoundRadius() && !IsRefracting(Entry->item))
 			AccumChildren(RefNode, &Settings->Forms, false, false);
 
 		Entry = Entry->next;
@@ -492,7 +501,7 @@ void ShadowManager::RenderShadowCubeMap(ShadowSceneLight** Lights, UInt32 LightI
 
 					D3DXVec3Normalize(&ObjectToLight, &ObjectToLight);
 					bool inFront = D3DXVec3Dot(&ObjectToLight, &CameraDirection) > 0;
-					if (RefNode->GetDistance(LightPos) <= Radius + RefNode->GetWorldBoundRadius()) AccumChildren(RefNode, &Settings->Forms, false, false);
+					if (RefNode->GetDistance(LightPos) <= Radius + RefNode->GetWorldBoundRadius() && !IsRefracting(Entry->item)) AccumChildren(RefNode, &Settings->Forms, false, false);
 				}
 				Entry = Entry->next;
 			}
