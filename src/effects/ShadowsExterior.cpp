@@ -67,6 +67,9 @@ void ShadowsExteriorEffect::UpdateConstants() {
 		// it just describes a different place - so it has to be caught here.
 		bool cut = !historyValid || D3DXVec3Length((D3DXVECTOR3*)&delta) > 500.0f;
 
+		// The sky occlusion term reads the ortho map, which is only rendered on request.
+		if (Constants.SkyOcclusionData.x > 0.0f) TheShaderManager->orthoRequired = true;
+
 		Constants.TemporalData.x = Settings.ShadowMaps.TemporalFilter && !cut;
 		Constants.TemporalData.y = Settings.ShadowMaps.TemporalWeight;
 	}
@@ -312,6 +315,10 @@ void ShadowsExteriorEffect::UpdateSettings() {
 	Constants.CompositeData.z = std::clamp(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.Skylighting", "Scale"), 0.0f, 1.0f);
 	Constants.CompositeData.w = std::clamp(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.Skylighting", "SunTint"), 0.0f, 1.0f);
 
+	Constants.SkyOcclusionData.x = std::clamp(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.Skylighting", "SkyOcclusion"), 0.0f, 1.0f);
+	Constants.SkyOcclusionData.y = max(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.Skylighting", "SkyOcclusionRadius"), 0.0f);
+	Constants.SkyOcclusionData.z = 0.0015f; // depth slack, in ortho depth units
+
 	// Sun smoothing settings.
 	Settings.SunSmoothing.SmoothSun = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.SunSmoothing", "SmoothSun");
 	Settings.SunSmoothing.QuantizeSun = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.SunSmoothing", "QuantizeSun");
@@ -460,6 +467,7 @@ void ShadowsExteriorEffect::RegisterConstants() {
 	TheShaderManager->RegisterConstant("TESR_ShadowPreviousViewProj", (D3DXVECTOR4*)&Constants.PreviousViewProj);
 	TheShaderManager->RegisterConstant("TESR_ShadowScreenSpaceData", &Constants.ScreenSpaceData);
 	TheShaderManager->RegisterConstant("TESR_ShadowComposite", &Constants.CompositeData);
+	TheShaderManager->RegisterConstant("TESR_SkyOcclusionData", &Constants.SkyOcclusionData);
 	TheShaderManager->RegisterConstant("TESR_OrthoData", &Constants.OrthoData);
 	TheShaderManager->RegisterConstant("TESR_ShadowFade", &Constants.ShadowFade);
 	TheShaderManager->RegisterConstant("TESR_ShadowRadius", &Constants.ShadowMapRadius);

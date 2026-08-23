@@ -12,12 +12,16 @@ float4 TESR_SunAmbient;
 float4 TESR_SunColor;
 float4 TESR_SunDirection;
 float4 TESR_ShadowComposite; // x: composite mode, y: normal distrust, z: skylighting, w: sun tint
+float4 TESR_SkyOcclusionData; // x: strength, y: ring radius in world units, z: thickness
+float4 TESR_OrthoData;        // x: full ortho extent in world units, y: 1 / ortho resolution
+row_major float4x4 TESR_ShadowCameraToLightTransformOrtho;
 float4 TESR_ShadowScreenSpaceData;
 
 sampler2D TESR_RenderedBuffer : register(s0) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
 sampler2D TESR_DepthBuffer : register(s1) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = ANISOTROPIC; MIPFILTER = LINEAR; };
 sampler2D TESR_PointShadowBuffer : register(s2)  = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
 sampler2D TESR_NormalsBuffer : register(s3) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
+sampler2D TESR_OrthoMapBuffer : register(s4) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
 
 
 static const float DARKNESS = max(0.0,1-TESR_ShadowData.y);
@@ -39,6 +43,58 @@ struct VSIN
 #include "Includes/Depth.hlsl"
 #include "Includes/Normals.hlsl"
 #include "Includes/Shadows.hlsl"
+
+// How much of the sky a point can see, read out of the ortho map - the top down depth render the
+// weather effects already use to decide where rain and snow can reach. That is the same question,
+// and it is one screen space ambient occlusion cannot answer: SSAO measures occlusion within a
+// small radius, so it darkens creases and contact points and leaves a large face under a roof
+// almost untouched. Sky visibility is a long range quantity.
+//
+// The ortho map holds the depth of the topmost surface above each point on the ground. A point
+// whose own ortho depth is greater than what is stored has something above it.
+//
+// Sampled as a ring rather than a single tap straight up. One tap only answers whether something
+// is directly overhead, which misses everything about how enclosed a place is; a ring approximates
+// how much of the hemisphere is blocked. It is still blind to walls that reach no higher than the
+// point itself - a narrow alley reads as open - so this is the complement of what SSAO gets right,
+// not a replacement for it.
+float GetSkyVisibility(float3 cameraRelativePos, float viewDistance) {
+	// tex2Dlod below, not tex2D: a gradient instruction inside forced flow control is X3528 in
+	// ps_3_0, and this early out is worth keeping. The ortho map has no mipmaps, so LOD 0 is exact.
+	[branch]
+	if (TESR_SkyOcclusionData.x <= 0.0f) return 1.0f;
+
+	float4 orthoPos = mul(float4(cameraRelativePos, 1.0f), TESR_ShadowCameraToLightTransformOrtho);
+	orthoPos.xyz /= orthoPos.w;
+	float2 orthoUv = float2(orthoPos.x * 0.5f + 0.5f, orthoPos.y * -0.5f + 0.5f);
+
+	// Nothing is recorded outside the map, and guessing there would put a hard edge in the middle
+	// of the view. Absent information means open sky.
+	if (any(saturate(orthoUv) != orthoUv)) return 1.0f;
+
+	// World units to ortho texture space. OrthoData.x is the full extent the map covers.
+	float2 step = (TESR_SkyOcclusionData.y / max(TESR_OrthoData.x, 1.0f)).xx;
+	float thickness = TESR_SkyOcclusionData.z;
+
+	float occluded = (orthoPos.z > tex2Dlod(TESR_OrthoMapBuffer, float4(orthoUv, 0.0f, 0.0f)).r + thickness) ? 2.0f : 0.0f;
+	float weight = 2.0f;
+
+	[unroll]
+	for (int i = 0; i < 8; i++) {
+		const float2 ring[8] = {
+			float2( 1.0f, 0.0f), float2(-1.0f, 0.0f), float2(0.0f,  1.0f), float2(0.0f, -1.0f),
+			float2( 0.7f, 0.7f), float2(-0.7f, 0.7f), float2(0.7f, -0.7f), float2(-0.7f, -0.7f) };
+		float h = tex2Dlod(TESR_OrthoMapBuffer, float4(orthoUv + ring[i] * step, 0.0f, 0.0f)).r;
+		occluded += (orthoPos.z > h + thickness) ? 1.0f : 0.0f;
+		weight += 1.0f;
+	}
+
+	float visibility = 1.0f - TESR_SkyOcclusionData.x * (occluded / weight);
+
+	// The map only covers so much ground, so this has to be gone by the time it runs out.
+	float fade = smoothstep(TESR_OrthoData.x * 0.35f, TESR_OrthoData.x * 0.5f, viewDistance);
+	return lerp(visibility, 1.0f, fade);
+}
 
 
 VSOUT FrameVS(VSIN IN)
@@ -188,6 +244,11 @@ float4 Shadow(VSOUT IN) : COLOR0
 
 	float3 ambientDir = lerp(ambientFlat, skyDir, saturate(TESR_ShadowComposite.z));
 
+	// Occlusion belongs on the ambient and nowhere else. The shadow says the sun is blocked;
+	// this says the sky is. Applying it to the whole pixel, which is what a screen space AO
+	// pass does further down the chain, also darkens light arriving straight from the sun.
+	ambientDir *= GetSkyVisibility(camera_vector, uniformDepth);
+
 	// One expression for both. The sun is attenuated by visibility, the ambient is replaced by
 	// its directional form, and the whole thing is divided by what the pixel was lit by. With no
 	// skylighting and no shadow it is exactly 1, so neutral is neutral by construction rather
@@ -211,6 +272,8 @@ float4 Shadow(VSOUT IN) : COLOR0
 	if (TESR_ShadowComposite.x == 6.0f) return float4(trust.xxx, 1.0f);
 	[branch]
 	if (TESR_ShadowComposite.x == 7.0f) return float4(ambientDir, 1.0f);
+	[branch]
+	if (TESR_ShadowComposite.x == 8.0f) return float4(GetSkyVisibility(camera_vector, uniformDepth).xxx, 1.0f);
 
 	// The composite this replaced, kept switchable so the two can be compared in place. It darkens
 	// the pixel by the shadow amount whichever way the surface faces, then blends the result
