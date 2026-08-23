@@ -8,6 +8,7 @@ float4 TESR_ShadowFade; // x: fading at sunrise/sunset, y:disabled shadows, z: p
 float4 TESR_SkyColor;
 float4 TESR_SunAmbient;
 float4 TESR_SunColor;
+float4 TESR_SunDirection;
 float4 TESR_ShadowScreenSpaceData;
 
 sampler2D TESR_RenderedBuffer : register(s0) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
@@ -65,26 +66,39 @@ float4 Shadow(VSOUT IN) : COLOR0
 
 	float2 Shadow = tex2D(TESR_PointShadowBuffer, IN.UVCoord).rg;
 	Shadow.r = lerp(TESR_ShadowFade.x, 1.0f, Shadow.r); // fade shadows to light when sun is low
+	Shadow.r = saturate(Shadow.r + Shadow.g * TESR_ShadowFade.z); // point lights light a sun shadow back up
 
-	// scale shadows strength to ambient before adding attenuation for pointlights (ShadowFade.z means point Lights are on)
-	float ambient = lerp(1, luma(TESR_SunAmbient), DARKNESS * TESR_ShadowFade.z); // linearise
-	Shadow.r = lerp(0, ambient, Shadow.r); //scale brightest areas to the ambient so it can be lit further with attenuation
-	Shadow.r += Shadow.g; // Apply poing light attenuation (includes point light shadows)
+	// What the surface would be lit by with the sun taken away, over what it is lit by now.
+	//
+	//     lit      = albedo * (sun * saturate(N.L) + ambient)
+	//     shadowed = albedo * ambient
+	//     shadowed / lit = ambient / (ambient + sun * saturate(N.L))
+	//
+	// Albedo cancels, so a shadowed pixel can be made from a lit one by multiplication alone - no
+	// G buffer, and nothing the object shaders need to know about. TESR_SunColor and
+	// TESR_SunAmbient are WorldSky's sunDirectional and sunAmbient, which is the pair the engine's
+	// own lighting sums, so the two terms are directly comparable.
+	//
+	// Two things fall out of this that the flat darkening it replaces had to fake. A surface facing
+	// away from the sun is left alone, because it was never in sunlight and removing the sun from
+	// it changes nothing - previously every shadowed pixel was darkened regardless of which way it
+	// faced. And shadowed surfaces end up the colour of the ambient by construction, which is what
+	// the sky tint blended in above was approximating.
+	float3 sunLight = TESR_SunColor.rgb * saturate(dot(world_normal, TESR_SunDirection.xyz));
+	float3 ambientLight = TESR_SunAmbient.rgb;
+	float3 shadowFactor = ambientLight / max(ambientLight + sunLight, 0.0001f);
 
-	Shadow.r = lerp(DARKNESS, 1.0, Shadow.r); 	// brighten shadow value from 0 to darkness from config value
+	// DARKNESS is 1 minus the Darkness setting, so at Darkness 1 the shadow is the result above and
+	// anything lower lifts it back towards no shadow at all. There is deliberately no way to go
+	// darker than this: the sun is already entirely gone, and there is nothing left to remove.
+	shadowFactor = lerp(shadowFactor, 1.0f, DARKNESS);
 
-	Shadow.r = saturate(Shadow.r);
+	float3 shading = lerp(shadowFactor, 1.0f, Shadow.r);
 
 #if viewshadows == 1
-	return Shadow;
+	return float4(shading, 1.0f);
 #endif
-    color.rgb = pows(color.rgb, 2.2); // linearise
-    float4 skyColor = float4(pows(TESR_SkyColor.rgb, 2.2),TESR_SkyColor.w); // linearise
-	// tint shadowed areas with Sky color before blending
-	float4 colorShadow = luma(color.rgb) * Shadow.r * skyColor;
-	colorShadow.rgb = lerp(colorShadow, color * Shadow.r, saturate(Shadow.r + 0.5)).rgb;// bias the transition between the 2 colors to make it less noticeable
-    colorShadow.rgb = pows(max(0.0,colorShadow.rgb), 1.0/2.2); // delinearise
-	return float4(colorShadow.rgb, 1.0); 
+	return float4(color.rgb * shading, 1.0f);
 }
 
 

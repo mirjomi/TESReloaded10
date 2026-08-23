@@ -231,7 +231,12 @@ bool ShadowsExteriorEffect::UpdateSettingsFromQuality(int quality) {
 			Settings.ShadowMaps.CascadeResolution = 2048;
 			break;
 		case 3:
-			Settings.ShadowMaps.Mode = 2;
+			// EVSM2, same as High. EVSM4 costs four more bytes per texel to suppress light bleed
+			// through thin geometry, and that difference was not visible in testing while the
+			// bytes were worth about 10 fps - a preset that charges for an invisible difference
+			// is the thing these presets kept doing. Full is separated from High by shadow
+			// distance instead. Mode 2 is still reachable from a custom configuration.
+			Settings.ShadowMaps.Mode = 1;
 			Settings.ShadowMaps.FormatBits = 0;
 			Settings.ShadowMaps.Distance = 6000.0f;
 			Settings.ShadowMaps.CascadeResolution = 2048;
