@@ -5,11 +5,13 @@ float4 TESR_ReciprocalResolution;
 float4 TESR_WaterSettings; //x: water height in the cell, y: water depth darkness, z: is camera underwater
 float4 TESR_ShadowData; // x: quality, y: darkness, z: nearmap resolution, w: farmap resolution
 float4 TESR_ShadowFade; // x: fading at sunrise/sunset, y:disabled shadows, z: pointlights shadows
-float4 TESR_SkyColor;
+float4 TESR_SkyColor;      // zenith
+float4 TESR_SkyLowColor;   // lower sky
+float4 TESR_HorizonColor;
 float4 TESR_SunAmbient;
 float4 TESR_SunColor;
 float4 TESR_SunDirection;
-float4 TESR_ShadowComposite; // x: composite mode, y: how hard to distrust an unreadable normal
+float4 TESR_ShadowComposite; // x: composite mode, y: how hard to distrust an unreadable normal, z: skylighting
 float4 TESR_ShadowScreenSpaceData;
 
 sampler2D TESR_RenderedBuffer : register(s0) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
@@ -117,14 +119,45 @@ float4 Shadow(VSOUT IN) : COLOR0
 	float NdotL = lerp(1.0f, saturate(dot(ratioNormal, TESR_SunDirection.xyz)), trust);
 	if (TESR_ShadowComposite.x == 2.0f) NdotL = 1.0f;
 	float3 sunLight = TESR_SunColor.rgb * NdotL;
-	float3 shadowFactor = TESR_SunAmbient.rgb / max(TESR_SunAmbient.rgb + sunLight, 0.0001f);
+	float3 ambientFlat = TESR_SunAmbient.rgb;
 
-	// DARKNESS is 1 minus the Darkness setting, so at Darkness 1 the shadow is the result above and
-	// anything lower lifts it back towards no shadow at all. There is deliberately no way to go
-	// darker than this: the sun is already entirely gone, and there is nothing left to remove.
-	shadowFactor = lerp(shadowFactor, 1.0f, DARKNESS);
+	// Directional sky ambient. The weather ambient is one colour for every surface whichever way
+	// it faces; the sky is not. A surface looking up sees the zenith, one looking sideways sees
+	// the lower sky and the horizon, one looking down sees bounce off the ground. All three
+	// colours are already published as constants, so this needs nothing computed on the CPU.
+	//
+	// It REDISTRIBUTES the ambient rather than adding to it. The gradient is rescaled to carry
+	// the same luminance as the flat ambient it replaces, so turning this up cannot make the
+	// scene brighter - it can only move light from one orientation to another. That is what
+	// keeps it neutral at its default, and it is the reason it needs no brightness control of
+	// its own to compensate for one it introduced.
+	//
+	// Ground bounce has no constant of its own, and the flat ambient is the closest thing to one:
+	// it is the light the weather says is arriving from everywhere, which for a downward facing
+	// surface is very nearly what the ground sends back.
+	float3 skySide = lerp(TESR_HorizonColor.rgb, TESR_SkyLowColor.rgb, 0.5f);
+	float upness = ratioNormal.z * 0.5f + 0.5f;
+	float3 skyDir = (upness > 0.5f)
+		? lerp(skySide, TESR_SkyColor.rgb, saturate((upness - 0.5f) * 2.0f))
+		: lerp(ambientFlat, skySide, saturate(upness * 2.0f));
 
-	float3 shading = lerp(shadowFactor, 1.0f, Shadow.r);
+	// Rescale to the flat ambient's luminance, so only the direction of the light changes.
+	float3 skyMean = (TESR_SkyColor.rgb + skySide + ambientFlat) / 3.0f;
+	skyDir *= luma(ambientFlat) / max(luma(skyMean), 0.0001f);
+
+	// Only where the normal can be trusted, for the same reason N.L is only used there.
+	float3 ambientDir = lerp(ambientFlat, skyDir, saturate(TESR_ShadowComposite.z) * trust);
+
+	// One expression for both. The sun is attenuated by visibility, the ambient is replaced by
+	// its directional form, and the whole thing is divided by what the pixel was lit by. With no
+	// skylighting and no shadow it is exactly 1, so neutral is neutral by construction rather
+	// than by tuning.
+	float vis = lerp(Shadow.r, 1.0f, DARKNESS);
+	float3 shading = (sunLight * vis + ambientDir) / max(sunLight + ambientFlat, 0.0001f);
+
+	// DARKNESS is 1 minus the Darkness setting. At Darkness 1 the sun is fully removed where the
+	// shadow says it should be, and anything lower lets some of it back through. There is
+	// deliberately no way to go darker: the sun is already entirely gone.
 
 	// Mode 3 shows what is about to be multiplied in, so an artefact can be attributed to this
 	// pass or ruled out of it without guessing from the composited result.
@@ -136,6 +169,8 @@ float4 Shadow(VSOUT IN) : COLOR0
 	if (TESR_ShadowComposite.x == 5.0f) return float4(world_normal * 0.5f + 0.5f, 1.0f);
 	[branch]
 	if (TESR_ShadowComposite.x == 6.0f) return float4(trust.xxx, 1.0f);
+	[branch]
+	if (TESR_ShadowComposite.x == 7.0f) return float4(ambientDir, 1.0f);
 
 	// The composite this replaced, kept switchable so the two can be compared in place. It darkens
 	// the pixel by the shadow amount whichever way the surface faces, then blends the result
