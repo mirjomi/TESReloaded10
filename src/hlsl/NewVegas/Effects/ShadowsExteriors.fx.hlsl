@@ -9,7 +9,7 @@ float4 TESR_SkyColor;
 float4 TESR_SunAmbient;
 float4 TESR_SunColor;
 float4 TESR_SunDirection;
-float4 TESR_ShadowComposite; // x: use the legacy composite
+float4 TESR_ShadowComposite; // x: composite mode, see CompositeMode in the toml
 float4 TESR_ShadowScreenSpaceData;
 
 sampler2D TESR_RenderedBuffer : register(s0) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
@@ -89,7 +89,10 @@ float4 Shadow(VSOUT IN) : COLOR0
 	// The terms are used as they arrive rather than linearised first. This pass runs on the frame
 	// after the game's own tone mapping, and the constants share that encoding, so a pow on only
 	// one side of the comparison pulls the two apart - which is what it looked like when tried.
-	float3 sunLight = TESR_SunColor.rgb * saturate(dot(world_normal, TESR_SunDirection.xyz));
+	// Mode 2 forces the normal term to 1, which is the only input the ratio takes that the path it
+	// replaced did not. If an artefact survives that, the normal is not what is producing it.
+	float NdotL = (TESR_ShadowComposite.x == 2.0f) ? 1.0f : saturate(dot(world_normal, TESR_SunDirection.xyz));
+	float3 sunLight = TESR_SunColor.rgb * NdotL;
 	float3 shadowFactor = TESR_SunAmbient.rgb / max(TESR_SunAmbient.rgb + sunLight, 0.0001f);
 
 	// DARKNESS is 1 minus the Darkness setting, so at Darkness 1 the shadow is the result above and
@@ -99,11 +102,18 @@ float4 Shadow(VSOUT IN) : COLOR0
 
 	float3 shading = lerp(shadowFactor, 1.0f, Shadow.r);
 
+	// Mode 3 shows what is about to be multiplied in, so an artefact can be attributed to this
+	// pass or ruled out of it without guessing from the composited result.
+	[branch]
+	if (TESR_ShadowComposite.x == 3.0f) return float4(shading, 1.0f);
+	[branch]
+	if (TESR_ShadowComposite.x == 4.0f) return float4(world_normal * 0.5f + 0.5f, 1.0f);
+
 	// The composite this replaced, kept switchable so the two can be compared in place. It darkens
 	// the pixel by the shadow amount whichever way the surface faces, then blends the result
 	// towards the sky colour to stop that reading as a grey wash.
 	[branch]
-	if (TESR_ShadowComposite.x) {
+	if (TESR_ShadowComposite.x == 1.0f) {
 		float legacy = lerp(0.0f, lerp(1.0f, luma(TESR_SunAmbient), DARKNESS * TESR_ShadowFade.z), Shadow.r);
 		legacy = saturate(lerp(DARKNESS, 1.0f, legacy));
 
