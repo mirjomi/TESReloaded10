@@ -153,6 +153,22 @@ float4 Shadow(VSOUT IN) : COLOR0
 	float3 skyLow = lerp(TESR_HorizonColor.rgb, TESR_SkyLowColor.rgb, 0.5f);
 	float3 skyAverage = lerp(skyLow, TESR_SkyColor.rgb, 0.5f);
 
+	// The sky is not the same colour in every direction. It scatters forward, so it runs closer
+	// to the sun's own colour near the sun and cooler away from it, and a surface facing the
+	// sun's half of the dome collects more of that. A purely vertical gradient cannot express it:
+	// two walls facing opposite ways get an identical ambient from one. This is the part of that
+	// asymmetry that is actually visible, for three instructions, rather than projecting the whole
+	// dome onto spherical harmonics to arrive somewhere very close at ordinary strengths.
+	//
+	// Hue only. The sky near the sun is genuinely brighter as well, but letting that through would
+	// mean a surface could end up with more ambient than it started with, and this effect not
+	// being able to brighten the scene is the property the whole design rests on. Renormalising
+	// to the untinted luminance keeps it a redistribution of colour rather than of light.
+	static const float SunTint = 0.5f;
+	float sunFacing = saturate(dot(ratioNormal, TESR_SunDirection.xyz));
+	float3 tinted = lerp(skyAverage, TESR_SunColor.rgb, sunFacing * SunTint);
+	skyAverage = tinted * (luma(skyAverage) / max(luma(tinted), 0.0001f));
+
 	// Where the normal is unreadable this falls back to the orientation it cannot determine, not
 	// to no skylighting at all. Falling back to the flat weather ambient was the first attempt
 	// and it is wrong in a way that shows: grass kept a warm ambient while the ground beside it
