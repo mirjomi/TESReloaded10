@@ -152,14 +152,23 @@ float4 Shadow(VSOUT IN) : COLOR0
 	// which is one lerp, and never reaches the zenith at all.
 	float3 skyLow = lerp(TESR_HorizonColor.rgb, TESR_SkyLowColor.rgb, 0.5f);
 	float3 skyAverage = lerp(skyLow, TESR_SkyColor.rgb, 0.5f);
-	float3 skyDir = lerp(ambientFlat, skyAverage, saturate(ratioNormal.z * 0.5f + 0.5f));
+
+	// Where the normal is unreadable this falls back to the orientation it cannot determine, not
+	// to no skylighting at all. Falling back to the flat weather ambient was the first attempt
+	// and it is wrong in a way that shows: grass kept a warm ambient while the ground beside it
+	// went cool, so two touching surfaces disagreed about what colour the light was. Dropping the
+	// N.L term where the normal is unknown is a small error; dropping the colour temperature with
+	// it is a large and very visible one. Halfway up is the honest answer for a surface whose
+	// orientation is unknown - half sky, half ground - and it keeps the colour consistent while
+	// giving up only the variation that was never computable there.
+	float orientation = lerp(0.5f, saturate(ratioNormal.z * 0.5f + 0.5f), trust);
+	float3 skyDir = lerp(ambientFlat, skyAverage, orientation);
 
 	// Rescale to the flat ambient's luminance, so only the direction of the light changes.
 	float3 skyMean = lerp(ambientFlat, skyAverage, 0.5f);
 	skyDir *= luma(ambientFlat) / max(luma(skyMean), 0.0001f);
 
-	// Only where the normal can be trusted, for the same reason N.L is only used there.
-	float3 ambientDir = lerp(ambientFlat, skyDir, saturate(TESR_ShadowComposite.z) * trust);
+	float3 ambientDir = lerp(ambientFlat, skyDir, saturate(TESR_ShadowComposite.z));
 
 	// One expression for both. The sun is attenuated by visibility, the ambient is replaced by
 	// its directional form, and the whole thing is divided by what the pixel was lit by. With no
