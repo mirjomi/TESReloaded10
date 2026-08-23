@@ -135,14 +135,27 @@ float4 Shadow(VSOUT IN) : COLOR0
 	// Ground bounce has no constant of its own, and the flat ambient is the closest thing to one:
 	// it is the light the weather says is arriving from everywhere, which for a downward facing
 	// surface is very nearly what the ground sends back.
-	float3 skySide = lerp(TESR_HorizonColor.rgb, TESR_SkyLowColor.rgb, 0.5f);
-	float upness = ratioNormal.z * 0.5f + 0.5f;
-	float3 skyDir = (upness > 0.5f)
-		? lerp(skySide, TESR_SkyColor.rgb, saturate((upness - 0.5f) * 2.0f))
-		: lerp(ambientFlat, skySide, saturate(upness * 2.0f));
+	// A surface never sees one point of the sky, it sees a whole hemisphere, so the colour that
+	// reaches it is a cosine weighted average over what is up there rather than the colour
+	// directly along its normal. Reaching the zenith colour for an upward facing surface was the
+	// first version of this and it turned the desert to ice: the zenith is the most saturated
+	// blue in the sky and nothing is lit by it alone.
+	//
+	// Weighting by cos(theta)sin(theta) puts the most weight around 45 degrees, so the average of
+	// a zenith-to-horizon gradient sits near the middle of it. That average is the most sky any
+	// surface can receive:
+	//
+	//     facing up          the whole sky dome, averaged
+	//     facing sideways    half sky, half ground
+	//     facing down        ground
+	//
+	// which is one lerp, and never reaches the zenith at all.
+	float3 skyLow = lerp(TESR_HorizonColor.rgb, TESR_SkyLowColor.rgb, 0.5f);
+	float3 skyAverage = lerp(skyLow, TESR_SkyColor.rgb, 0.5f);
+	float3 skyDir = lerp(ambientFlat, skyAverage, saturate(ratioNormal.z * 0.5f + 0.5f));
 
 	// Rescale to the flat ambient's luminance, so only the direction of the light changes.
-	float3 skyMean = (TESR_SkyColor.rgb + skySide + ambientFlat) / 3.0f;
+	float3 skyMean = lerp(ambientFlat, skyAverage, 0.5f);
 	skyDir *= luma(ambientFlat) / max(luma(skyMean), 0.0001f);
 
 	// Only where the normal can be trusted, for the same reason N.L is only used there.
