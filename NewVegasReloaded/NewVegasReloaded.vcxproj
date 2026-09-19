@@ -134,7 +134,7 @@
     <ClCompile Include="..\src\core\ShadowManager.cpp" />
     <ClCompile Include="..\src\core\TextureManager.cpp" />
     <ClCompile Include="..\src\core\TextureRecord.cpp" />
-    <ClCompile Include="..\src\effects\AmbientOcclusion.cpp" />
+    <ClCompile Include="..\src\effects\IndirectLighting.cpp" />
     <ClCompile Include="..\src\effects\Animator.cpp" />
     <ClCompile Include="..\src\effects\AvgLuma.cpp" />
     <ClCompile Include="..\src\effects\BloodLens.cpp" />
@@ -237,7 +237,7 @@
     <ClInclude Include="..\src\core\ShadowManager.h" />
     <ClInclude Include="..\src\core\TextureManager.h" />
     <ClInclude Include="..\src\core\TextureRecord.h" />
-    <ClInclude Include="..\src\effects\AmbientOcclusion.h" />
+    <ClInclude Include="..\src\effects\IndirectLighting.h" />
     <ClInclude Include="..\src\effects\Animator.h" />
     <ClInclude Include="..\src\effects\AvgLuma.h" />
     <ClInclude Include="..\src\effects\BloodLens.h" />

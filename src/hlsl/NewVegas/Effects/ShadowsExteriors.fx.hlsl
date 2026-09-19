@@ -13,11 +13,13 @@ float4 TESR_SunColor;
 float4 TESR_SunDirection;
 float4 TESR_ShadowComposite; // x: composite mode, y: normal distrust, z: skylighting, w: sun tint
 float4 TESR_ShadowScreenSpaceData;
+float4 TESR_IndirectLightingControl; // x: IndirectLighting rendered its buffer for this pass to apply
 
 sampler2D TESR_RenderedBuffer : register(s0) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
 sampler2D TESR_DepthBuffer : register(s1) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = ANISOTROPIC; MIPFILTER = LINEAR; };
 sampler2D TESR_PointShadowBuffer : register(s2)  = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
 sampler2D TESR_NormalsBuffer : register(s3) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = LINEAR; };
+sampler2D TESR_IndirectLightingBuffer : register(s4) = sampler_state { ADDRESSU = CLAMP; ADDRESSV = CLAMP; MAGFILTER = LINEAR; MINFILTER = LINEAR; MIPFILTER = NONE; };
 
 
 static const float DARKNESS = max(0.0,1-TESR_ShadowData.y);
@@ -192,8 +194,24 @@ float4 Shadow(VSOUT IN) : COLOR0
 	// its directional form, and the whole thing is divided by what the pixel was lit by. With no
 	// skylighting and no shadow it is exactly 1, so neutral is neutral by construction rather
 	// than by tuning.
+	// Occlusion and bounce from IndirectLighting, which rendered them into a buffer of their own
+	// before this pass for this purpose: they are properties of the ambient light, and this is the
+	// pass that can tell the ambient from the sun. Applied here, a crease in full sun keeps its
+	// sunlight, where the multiply they used to be darkened it along with everything else.
+	//
+	// The buffer holds a multiplier for linear colour, and this pass works on the encoded frame, so
+	// it is brought across before use. That keeps a surface lit only by the ambient exactly as dark
+	// as the old multiply left it. Light from lamps is spared, the way it relights a sun shadow above.
+	float3 occlusion = 1.0f;
+	[branch]
+	if (TESR_IndirectLightingControl.x > 0.0f) {
+		occlusion = tex2Dlod(TESR_IndirectLightingBuffer, float4(uv, 0.0f, 0.0f)).rgb;
+		occlusion = pows(max(occlusion, 0.0f), 1.0f / 2.2f);
+		occlusion = lerp(occlusion, 1.0f, saturate(Shadow.g * TESR_ShadowFade.z));
+	}
+
 	float vis = lerp(Shadow.r, 1.0f, DARKNESS);
-	float3 shading = (sunLight * vis + ambientDir) / max(sunLight + ambientFlat, 0.0001f);
+	float3 shading = (sunLight * vis + ambientDir * occlusion) / max(sunLight + ambientFlat, 0.0001f);
 
 	// DARKNESS is 1 minus the Darkness setting. At Darkness 1 the sun is fully removed where the
 	// shadow says it should be, and anything lower lets some of it back through. There is
@@ -211,6 +229,8 @@ float4 Shadow(VSOUT IN) : COLOR0
 	if (TESR_ShadowComposite.x == 6.0f) return float4(trust.xxx, 1.0f);
 	[branch]
 	if (TESR_ShadowComposite.x == 7.0f) return float4(ambientDir, 1.0f);
+	[branch]
+	if (TESR_ShadowComposite.x == 8.0f) return float4(occlusion, 1.0f);
 
 	// The composite this replaced, kept switchable so the two can be compared in place. It darkens
 	// the pixel by the shadow amount whichever way the surface faces, then blends the result
@@ -229,7 +249,8 @@ float4 Shadow(VSOUT IN) : COLOR0
 #if viewshadows == 1
 		return float4(legacy.xxx, 1.0f);
 #endif
-		return float4(color.rgb, 1.0f);
+		// No ambient term to put the occlusion on here, so it multiplies the whole pixel as it did.
+		return float4(color.rgb * occlusion, 1.0f);
 	}
 
 #if viewshadows == 1

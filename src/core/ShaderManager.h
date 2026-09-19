@@ -77,7 +77,7 @@ public:
 	void					SetCustomConstant(const char* Name, D3DXVECTOR4 Value);
 		
 	struct	EffectsStruct {
-		AmbientOcclusionEffect*	AmbientOcclusion;
+		IndirectLightingEffect*	IndirectLighting;
 		AvgLumaEffect*			AvgLuma;
 		BloodLensEffect*		BloodLens;
 		BloomEffect*			Bloom;

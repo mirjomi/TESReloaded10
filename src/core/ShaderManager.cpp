@@ -44,7 +44,7 @@ void ShaderManager::Initialize() {
 
 	// initializing the list of effect names
 	TheShaderManager->RegisterEffect<AvgLumaEffect>(&TheShaderManager->Effects.AvgLuma);
-	TheShaderManager->RegisterEffect<AmbientOcclusionEffect>(&TheShaderManager->Effects.AmbientOcclusion);
+	TheShaderManager->RegisterEffect<IndirectLightingEffect>(&TheShaderManager->Effects.IndirectLighting);
 	TheShaderManager->RegisterEffect<BloodLensEffect>(&TheShaderManager->Effects.BloodLens);
 	TheShaderManager->RegisterEffect<BloomEffect>(&TheShaderManager->Effects.Bloom);
 	TheShaderManager->RegisterEffect<BloomLegacyEffect>(&TheShaderManager->Effects.BloomLegacy);
@@ -719,13 +719,23 @@ void ShaderManager::RenderEffectsPreTonemapping(IDirect3DSurface9* RenderTarget)
 	Device->StretchRect(RenderTarget, NULL, RenderedSurface, NULL, D3DTEXF_NONE);
 	Device->StretchRect(RenderTarget, NULL, SourceSurface, NULL, D3DTEXF_NONE);
 
+	// Occlusion and bounce go into buffers of their own before the composite, so that the exterior
+	// composite can apply them to the ambient alone - it is the one pass that can tell the ambient
+	// from the sun. Where it will not run, they are multiplied into the frame further down, where
+	// ambient occlusion always was.
+	ShadowsExteriorEffect* Composite = Effects.ShadowsExteriors;
+	bool composited = GameState.isExterior && Composite->Enabled && Composite->Effect && Composite->ShouldRender();
+	bool indirectRendered = Effects.IndirectLighting->RenderBuffers(Device, composited);
+	Device->SetRenderTarget(0, RenderTarget);
+
 	if (GameState.isExterior) 
 		Effects.ShadowsExteriors->Render(Device, RenderTarget, RenderedSurface, 0, false, SourceSurface);
 	else 
 		Effects.ShadowsInteriors->Render(Device, RenderTarget, RenderedSurface, 0, true, SourceSurface);
 
 	Effects.SnowAccumulation->Render(Device, RenderTarget, RenderedSurface, 0, false, SourceSurface);
-	Effects.AmbientOcclusion->Render(Device, RenderTarget, RenderedSurface, 0, false, SourceSurface);
+	if (indirectRendered && !composited)
+		Effects.IndirectLighting->Render(Device, RenderTarget, RenderedSurface, 1, false, SourceSurface);
 	Effects.WetWorld->Render(Device, RenderTarget, RenderedSurface, 0, false, SourceSurface);
 	// Beam march first, into its own half res buffer, so the Flashlight Combine pass can
 	// read it. Control.x already folds the effect toggle, the per view toggle and the
