@@ -328,6 +328,7 @@ void ShadowsExteriorEffect::UpdateSettings() {
 	Settings.ShadowMaps.LightBleedScale = std::clamp(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.ShadowMaps", "LightBleedScale"), 0.0f, 1.0f);
 	Settings.ShadowMaps.TemporalFilter = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.ShadowMaps", "TemporalFilter");
 	Settings.ShadowMaps.TemporalWeight = std::clamp(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.ShadowMaps", "TemporalWeight"), 0.0f, 0.95f);
+	Settings.ShadowMaps.TemporalMovers = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.ShadowMaps", "TemporalMovers");
 
 	// Generic exterior shadows settings
 	Settings.Exteriors.Enabled = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.Main", "Enabled");
@@ -457,6 +458,10 @@ void ShadowsExteriorEffect::RegisterConstants() {
 	TheShaderManager->RegisterConstant("TESR_ShadowTemporalData", &Constants.TemporalData);
 	TheShaderManager->RegisterConstant("TESR_ShadowPreviousViewTransform", (D3DXVECTOR4*)&Constants.PreviousViewTransform);
 	TheShaderManager->RegisterConstant("TESR_ShadowCameraDelta", &Constants.CameraDelta);
+	Constants.MoverData = D3DXVECTOR4(0.0f, 0.0f, 0.0f, 0.0f);
+	TheShaderManager->RegisterConstant("TESR_ShadowMoverData", &Constants.MoverData);
+	TheShaderManager->RegisterConstant("TESR_ShadowMovers", Constants.Movers);
+	TheShaderManager->RegisterConstant("TESR_ShadowMoverTrails", Constants.MoverTrails);
 	TheShaderManager->RegisterConstant("TESR_ShadowPreviousViewProj", (D3DXVECTOR4*)&Constants.PreviousViewProj);
 	TheShaderManager->RegisterConstant("TESR_ShadowScreenSpaceData", &Constants.ScreenSpaceData);
 	TheShaderManager->RegisterConstant("TESR_ShadowComposite", &Constants.CompositeData);

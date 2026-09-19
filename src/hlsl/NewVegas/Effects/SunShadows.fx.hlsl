@@ -17,6 +17,9 @@ float4 TESR_ShadowBiasData; // x: normal bias (texels), y: slope bias (texels), 
 float4 TESR_ShadowFilterData; // x: filter radius (texels), y: light bleed reduction scale
 float4 TESR_ShadowTemporalData; // x: enabled, y: history weight
 float4 TESR_ShadowCameraDelta; // xyz: current camera position minus the history's
+float4 TESR_ShadowMoverData; // x: number of moving shadow casters in the two arrays below
+float4 TESR_ShadowMovers[8]; // xyz: bound centre relative to the camera, w: bound radius
+float4 TESR_ShadowMoverTrails[8]; // xyz: path back to where its shadow may still be in the history, w: history weight around it
 float4x4 TESR_ShadowPreviousViewProj;
 float4x4 TESR_ShadowPreviousViewTransform;
 float4 TESR_ShadowNearCenter; // x,y,z: center (world space), w: radius
@@ -321,6 +324,54 @@ float4 Shadow(VSOUT IN) : COLOR0
 }
 
 
+// The history weight to use at a point, given the actors moving through the scene.
+//
+// The rejection tests in TemporalShadow catch a SURFACE that changed. They cannot catch a shadow
+// moving across a surface that did not: the ground under a running actor's shadow is the same
+// ground, at the same depth, facing the same way, so the old shadow passes as valid history and
+// trails behind. The shadow pass knows which casters moved, and hands them over; the weight comes
+// down wherever one of them shades the point now or did over the life of the history.
+//
+// "Shades the point" is tested against the actor's bounding sphere swept back along its path.
+// Seen along the sun direction, everything on one line lies in the same shadow, so the point and
+// the swept segment are both flattened onto the plane facing the sun and it becomes a distance in
+// that plane. Only casters on the sun side of the point count. A point on the actor itself lies
+// inside its own sphere, so shadow sliding across the actor is covered as well.
+float MoverHistoryWeight(float3 position, float weight) {
+    float3 toSun = normalize(TESR_SmoothedSunDir.xyz);
+    float result = weight;
+
+    // Unrolled, with each slot behind a branch on the count. A real loop compiles to a sixteen
+    // instruction select chain per iteration just to pick the array element: ps_3_0 can only index
+    // constants with the counter of a loop driven by an integer constant, and this framework only
+    // sets float ones. Unrolled, each slot reads its constants directly and unused slots are skipped.
+    [unroll]
+    for (int i = 0; i < 8; i++) {
+        [branch]
+        if (i < TESR_ShadowMoverData.x) {
+            float4 mover = TESR_ShadowMovers[i];
+            float4 trail = TESR_ShadowMoverTrails[i];
+
+            float3 centre = mover.xyz - position;
+            float3 centreFlat = centre - dot(centre, toSun) * toSun;
+            float3 trailFlat = trail.xyz - dot(trail.xyz, toSun) * toSun;
+
+            float along = saturate(-dot(centreFlat, trailFlat) / max(dot(trailFlat, trailFlat), 0.0001f));
+            float distance = length(centreFlat + along * trailFlat);
+            float height = dot(centre + along * trail.xyz, toSun);
+
+            // Soft over the outer quarter of the radius so the weight does not step at the edge.
+            float coverage = saturate((1.25f * mover.w - distance) / (0.25f * mover.w + 0.0001f));
+            coverage = coverage * coverage * (3.0f - 2.0f * coverage);
+            coverage *= (height > -mover.w) ? 1.0f : 0.0f;
+
+            result = min(result, lerp(weight, trail.w, coverage));
+        }
+    }
+    return result;
+}
+
+
 // Reuse the previous frame's shadow term where it still describes the same surface.
 //
 // The sun turns about 3e-5 radians per frame, which moves a shadow by a few hundredths of a texel
@@ -419,7 +470,15 @@ float4 TemporalShadow(VSOUT IN) : COLOR0
 	// clamping history into the current frame's local range re-injects precisely the noise this
 	// filter removes. Measured: it cleared the ghosting and brought the shimmer back with it.
 
-    current.r = lerp(current.r, history, TESR_ShadowTemporalData.y);
+    float historyWeight = TESR_ShadowTemporalData.y;
+
+	// Shadow cast by something moving is the case neither test above can see - the surface it
+	// falls on did not change. See MoverHistoryWeight.
+	[branch]
+    if (TESR_ShadowMoverData.x > 0.0f)
+        historyWeight = MoverHistoryWeight(worldPos.xyz, historyWeight);
+
+    current.r = lerp(current.r, history, historyWeight);
     return current;
 }
 

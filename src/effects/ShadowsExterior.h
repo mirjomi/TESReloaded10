@@ -20,6 +20,7 @@ public:
 
 	static const int Modes = 3;
 	static const int FormatBits = 2;
+	static const int MoversMax = 8;	// must match the arrays in SunShadows.fx
 
 	D3DFORMAT Formats[Modes][FormatBits] = {
 		{D3DFMT_G16R16, D3DFMT_G32R32F},
@@ -57,6 +58,9 @@ public:
 		D3DXVECTOR4		CameraDelta;	// xyz: current camera position minus the one the history was rendered from
 		D3DXMATRIX		PreviousViewProj;
 		D3DXMATRIX		PreviousViewTransform;
+		D3DXVECTOR4		MoverData;					// x: number of moving casters in the arrays below
+		D3DXVECTOR4		Movers[MoversMax];			// xyz: bound centre relative to the camera, w: bound radius
+		D3DXVECTOR4		MoverTrails[MoversMax];		// xyz: path back to where its shadow may linger, w: history weight around it
 	};
 
 	// Settings
@@ -113,6 +117,7 @@ public:
 		float				EVSMExponent;
 		bool				TemporalFilter;
 		float				TemporalWeight;
+		bool				TemporalMovers;
 	};
 
 	struct OrthoStruct {
