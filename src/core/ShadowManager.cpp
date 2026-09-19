@@ -46,6 +46,7 @@ void ShadowManager::Initialize() {
 	TheShadowManager->ShadowCubeMapViewPort = { 0, 0, ShadowCubeMapSize, ShadowCubeMapSize, 0.0f, 1.0f };
 
 	TheShadowManager->shadowMapsRenderTime = 0;
+	TheShadowManager->TrackMovers = false;
 }
 
 
@@ -288,11 +289,143 @@ void ShadowManager::AccumExteriorCell(TESObjectCELL* Cell, ShadowsExteriorEffect
 			continue;
 		}
 
-		if (RefNode && RefNode->WithinFrustum(&ShadowMap->ShadowMapFrustumPlanes))
+		if (RefNode && RefNode->WithinFrustum(&ShadowMap->ShadowMapFrustumPlanes)) {
 			AccumChildren(RefNode, &ShadowMap->Forms, false, false, &ShadowMap->ShadowMapFrustumPlanes);
+			if (TrackMovers) TrackMover(Entry->item, RefNode, ShadowMap);
+		}
 
 		Entry = Entry->next;
 	}
+}
+
+
+// Record an actor the sun cascades just drew. Once per frame, from the finest cascade that drew it,
+// since the cascades run from Near outwards.
+void ShadowManager::TrackMover(TESObjectREFR* Ref, NiNode* Node, ShadowsExteriorEffect::ShadowMapSettings* ShadowMap) {
+	UInt8 TypeID = Ref->baseForm->formType;
+	if (TypeID != TESForm::FormType::kFormType_NPC && TypeID != TESForm::FormType::kFormType_Creature &&
+		TypeID != TESForm::FormType::kFormType_LeveledCreature)
+		return;
+
+	for (const TrackedMover& Tracked : Movers)
+		if (Tracked.RefID == Ref->refID) return;
+
+	NiBound* Bound = Node->GetWorldBound();
+	TrackedMover Mover;
+	Mover.RefID = Ref->refID;
+	Mover.Position = D3DXVECTOR3(Node->m_worldTransform.pos.x, Node->m_worldTransform.pos.y, Node->m_worldTransform.pos.z);
+	Mover.Bound = D3DXVECTOR4(Bound->Center.x, Bound->Center.y, Bound->Center.z, Bound->Radius);
+	Mover.Texel = 2.0f * ShadowMap->ShadowMapCascadeCenterRadius.w * ShadowMap->ShadowMapInverseResolution;
+	Movers.push_back(Mover);
+}
+
+
+// Tell the temporal filter which shadows belong to something moving.
+//
+// The filter rejects history where the SURFACE changed - its depth or its normal. That is blind to
+// a moving caster: the ground an actor's shadow slides across is the same ground, at the same
+// depth, facing the same way, so the old shadow is accepted as valid history and trails behind.
+// What changed is the light arriving there, and only the caster knows it moved.
+//
+// So each moving actor goes to the shader with its bound, the path back to where its shadow may
+// still be in the history, and the history weight to use around it. The weight is chosen to cap
+// the trail, not to switch the filter off. An exponential history of weight w lags the current
+// frame by w / (1 - w) frames, so a caster moving s per frame leaves a trail of about
+// s * w / (1 - w); holding that to one texel gives w = texel / (texel + s). An actor standing still
+// keeps the full weight, and a moving one loses only as much as its speed calls for.
+void ShadowManager::PublishMovers() {
+	ShadowsExteriorEffect* Shadows = TheShaderManager->Effects.ShadowsExteriors;
+	ShadowsExteriorEffect::ShadowStruct* Constants = &Shadows->Constants;
+	float weight = Shadows->Settings.ShadowMaps.TemporalWeight;
+
+	// Frames until a sample's share of the history has decayed to 5%, from w^n = 0.05. The path
+	// handed to the shader reaches back this far, to cover shadow the history took on while the
+	// actor still had the full weight around it - when it has only just started moving, say.
+	float tailFrames = (weight > 0.0f && weight < 1.0f) ? logf(0.05f) / logf(weight) : 0.0f;
+
+	D3DXVECTOR3 camera(TheRenderManager->CameraPosition.x, TheRenderManager->CameraPosition.y, TheRenderManager->CameraPosition.z);
+
+	MoverSteps.clear();
+	for (size_t i = 0; i < Movers.size(); i++) {
+		const TrackedMover& Mover = Movers[i];
+		auto Previous = std::find_if(PreviousMovers.begin(), PreviousMovers.end(),
+			[&Mover](const TrackedMover& Candidate) { return Candidate.RefID == Mover.RefID; });
+		if (Previous == PreviousMovers.end()) continue; // nothing to measure movement against
+
+		D3DXVECTOR3 step = Mover.Position - Previous->Position;
+		float length = D3DXVec3Length(&step);
+
+		// Further than anything walks in a frame: a teleport, with no path between the two places.
+		if (length > 200.0f) continue;
+
+		// Only worth a slot if it lowers the weight at all, which is texel / (texel + s) < w.
+		if (length * weight <= Mover.Texel * (1.0f - weight)) continue;
+
+		D3DXVECTOR3 fromCamera = D3DXVECTOR3(Mover.Bound.x, Mover.Bound.y, Mover.Bound.z) - camera;
+		MoverSteps.push_back({ D3DXVec3Length(&fromCamera), i, step });
+	}
+
+	// Nearest first, when there are more than the shader takes: their trails cover the most screen.
+	std::sort(MoverSteps.begin(), MoverSteps.end(),
+		[](const MoverStep& a, const MoverStep& b) { return a.Distance < b.Distance; });
+
+	// The shader asks whether a point lies in the shadow of a sphere swept along a path. Seen along
+	// the sun direction everything on one line shares a shadow, so that is a distance in the plane
+	// facing the sun. The projection into that plane is the same for every pixel, so it is done here
+	// once, leaving the shader a 2D point to segment distance per actor.
+	D3DXVECTOR3 toSun(Constants->SmoothedSunDir.x, Constants->SmoothedSunDir.y, Constants->SmoothedSunDir.z);
+	D3DXVec3Normalize(&toSun, &toSun);
+	D3DXVECTOR3 helper = fabsf(toSun.z) < 0.99f ? D3DXVECTOR3(0.0f, 0.0f, 1.0f) : D3DXVECTOR3(1.0f, 0.0f, 0.0f);
+	D3DXVECTOR3 axisU, axisV;
+	D3DXVec3Cross(&axisU, &helper, &toSun);
+	D3DXVec3Normalize(&axisU, &axisU);
+	D3DXVec3Cross(&axisV, &toSun, &axisU);
+	Constants->MoverAxes[0] = D3DXVECTOR4(axisU, 0.0f);
+	Constants->MoverAxes[1] = D3DXVECTOR4(axisV, 0.0f);
+	Constants->MoverAxes[2] = D3DXVECTOR4(toSun, 0.0f);
+
+	int count = (int)MoverSteps.size() < ShadowsExteriorEffect::MoversMax ? (int)MoverSteps.size() : ShadowsExteriorEffect::MoversMax;
+	for (int i = 0; i < ShadowsExteriorEffect::MoversMax; i++) {
+		if (i < count) {
+			const MoverStep& Moved = MoverSteps[i];
+			const TrackedMover& Mover = Movers[Moved.Index];
+			float length = D3DXVec3Length(&Moved.Step);
+			float bounded = Mover.Texel / (Mover.Texel + length);
+			float radius = Mover.Bound.w > 1.0f ? Mover.Bound.w : 1.0f;
+
+			D3DXVECTOR3 centre = D3DXVECTOR3(Mover.Bound.x, Mover.Bound.y, Mover.Bound.z) - camera;
+			D3DXVECTOR3 trail = Moved.Step * -tailFrames;
+
+			// xy: centre in the plane facing the sun, zw: the path back, in the same plane.
+			float pathU = D3DXVec3Dot(&trail, &axisU);
+			float pathV = D3DXVec3Dot(&trail, &axisV);
+			Constants->MoverSegments[i] = D3DXVECTOR4(D3DXVec3Dot(&centre, &axisU), D3DXVec3Dot(&centre, &axisV), pathU, pathV);
+
+			// x: the highest the caster reaches towards the sun anywhere along its path, plus one radius,
+			// so a point counts as shaded unless it is above all of it. Taking the whole path's highest
+			// point rather than the height at the closest point is conservative and saves the shader a
+			// term. y: 1 / |path|^2 for projecting onto the path, 0 for a path too short to have a
+			// direction - the projection then lands on the centre, with no division to guard.
+			// z: 1 / (0.5625 r^2), which puts the soft edge of the coverage between r and 1.25 r when
+			// used on a squared distance. w: the history weight to use around it.
+			float centreHeight = D3DXVec3Dot(&centre, &toSun);
+			float pathHeight = D3DXVec3Dot(&trail, &toSun);
+			float pathLength2 = pathU * pathU + pathV * pathV;
+			Constants->MoverShapes[i] = D3DXVECTOR4(centreHeight + (pathHeight > 0.0f ? pathHeight : 0.0f) + radius,
+				pathLength2 > 0.0001f ? 1.0f / pathLength2 : 0.0f,
+				1.0f / (0.5625f * radius * radius), bounded < weight ? bounded : weight);
+		}
+		else {
+			// The shader runs slots in blocks of four, so the tail of the last block is read. These cover
+			// nothing: no point is that far below the sun.
+			Constants->MoverSegments[i] = D3DXVECTOR4(0.0f, 0.0f, 0.0f, 0.0f);
+			Constants->MoverShapes[i] = D3DXVECTOR4(-1.0e30f, 0.0f, 0.0f, weight);
+		}
+	}
+	Constants->MoverData.x = (float)count;
+
+	PreviousMovers.swap(Movers);
+	Movers.clear();
 }
 
 
@@ -665,6 +798,9 @@ void ShadowManager::RenderShadowMaps() {
 	// Quantize sun direction angle to reduce shimmer by a large factor.
 	D3DXVECTOR3 SunDir = Shadows->CalculateSmoothedSunDir();
 
+	Movers.clear();
+	bool trackMovers = Shadows->Settings.ShadowMaps.TemporalFilter && Shadows->Settings.ShadowMaps.TemporalMovers;
+
 	if (isExterior && (ExteriorEnabled || TheShaderManager->orthoRequired)) {
 
 		// Update cascade depths based on current camera.
@@ -700,7 +836,11 @@ void ShadowManager::RenderShadowMaps() {
 
 				if (!Shadows->Settings.ShadowMaps.LimitFrequency || i != MapLod || !(FrameCounter % 4)) {
 					Shadows->Constants.ShadowViewProj = Shadows->GetCascadeViewProj(ShadowMap, &SunDir);
+					// With LimitFrequency, Lod is redrawn one frame in four, so it cannot say where anything
+					// was on the frame before.
+					TrackMovers = trackMovers && (i != MapLod || !Shadows->Settings.ShadowMaps.LimitFrequency);
 					RenderShadowMap(ShadowMap, &Shadows->Constants.ShadowViewProj);
+					TrackMovers = false;
 				}
 				else {
 					// We need to update the shadowprojmatrix of MapLod by the camera translation between frames to avoid jumps in the shadows.
@@ -771,6 +911,9 @@ void ShadowManager::RenderShadowMaps() {
 			shadowMapTimer.LogTime("ShadowManager::RenderShadowMap Ortho");
 		}
 	}
+
+	// Every frame, including the ones that tracked nothing, so a list never outlives its frame.
+	PublishMovers();
 
 	// Render shadow maps for point lights
 	bool usePointLights = (TheShaderManager->GameState.isDayTime > 0.5) ? ShadowsExteriors->UsePointShadowsDay : ShadowsExteriors->UsePointShadowsNight;
