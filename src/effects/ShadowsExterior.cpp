@@ -214,7 +214,14 @@ bool ShadowsExteriorEffect::UpdateSettingsFromQuality(int quality) {
 			break;
 		case 2:
 			Settings.ShadowMaps.Mode = 1;
-			Settings.ShadowMaps.FormatBits = 1;
+			// 16 bit, not 32. This was the only preset asking for a 32 bit atlas, and it pays twice.
+			// At 32 bit the EVSM exponent goes to 40, and at that strength neighbouring warped depths
+			// differ by orders of magnitude, so blurring and bilinear filtering collapse onto the largest
+			// of them - a max filter, which reads occluders as further away than they are. And 32 bit
+			// float filtering is not full rate on consumer hardware, on an atlas this pass samples
+			// heavily: against Full, which is the same atlas size at the same eight bytes per texel,
+			// this preset measured 8 fps slower despite a shorter distance and a cheaper resolve.
+			Settings.ShadowMaps.FormatBits = 0;
 			Settings.ShadowMaps.Distance = 4500.0f;
 			Settings.ShadowMaps.CascadeResolution = 2048;
 			break;
@@ -255,7 +262,10 @@ bool ShadowsExteriorEffect::UpdateSettingsFromQuality(int quality) {
 			ShadowMap->ClearColor = D3DXVECTOR4(1.0f, 1.0f, 0.0f, 1.0f);
 			break;
 		case 1:
-			ShadowMap->ClearColor = D3DXVECTOR4(pos, neg, 0.0f, 1.0f);
+			// (pos, pos^2), matching what ShadowMap.pso writes for EVSM2. An unwritten texel has to read
+			// as the far plane, and as a consistent moment pair, or the variance at the edge of a
+			// cascade is meaningless.
+			ShadowMap->ClearColor = D3DXVECTOR4(pos, pos * pos, 0.0f, 1.0f);
 			ShadowMap->CustomClearRequired = true;
 			break;
 		case 2:

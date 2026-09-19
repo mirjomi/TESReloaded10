@@ -82,16 +82,20 @@ PS_OUTPUT main(VS_OUTPUT IN) {
         OUT.color_0 = float4(biasedDepth, moment2, 0.0f, 1.0f);
     }
     else if (TESR_ShadowFormatData.x == 1.0f && !TESR_ShadowData.z) {
-		// EVSM2
-		// NOTE: this layout looks wrong and is left alone only because it is not the default.
-		// It writes (pos, neg), but GetLightAmountValueEVSM2 hands .xy straight to
-		// ChebyshevUpperBound, which reads .y as the second moment of .x - so the negative warp
-		// is being used as the second moment of the positive one. A correct EVSM2 stores
-		// (pos, pos^2) and has no room for the negative warp at all. Fixing it means changing
-		// the channel layout and the matching clear colour, so it is out of scope here.
+		// EVSM2: the positively warped depth and its square, the same (pos, pos^2) pair EVSM4
+		// stores in .xz. GetLightAmountValueEVSM2 reads the second channel as the second moment of
+		// the first, so storing the negative warp there made the variance neg - pos*pos: negative for
+		// every texel, clamped to the floor every time, and no variance term at all.
+		//
+		// The fp16 exponent clamp is the tell that this was always the intended layout. It stops at
+		// 5.54, and exp(5.54)^2 is about 64900 against a maximum of 65504 - a bound that only matters
+		// if the square is what gets stored.
+		//
+		// Dropping the negative warp is what EVSM2 is: half the channels of EVSM4, so light bleeds
+		// through thin geometry more readily, for an atlas of four bytes per texel rather than eight.
         float2 exponents = GetEVSMExponents(TESR_ShadowFormatData.w, 5.0f);
         float2 evsm2 = WarpDepth(biasedDepth, exponents);
-        OUT.color_0 = float4(evsm2, 0.0f, 1.0f);
+        OUT.color_0 = float4(evsm2.x, evsm2.x * evsm2.x, 0.0f, 1.0f);
     }
     else if (TESR_ShadowFormatData.x == 2.0f && !TESR_ShadowData.z) {
 		// EVSM4
