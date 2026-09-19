@@ -122,7 +122,7 @@ Enabled = false
 
 [_Shaders.IndirectLighting.Exteriors]
 Enabled = true                          # Ambient occlusion and bounce light in exteriors. With exterior shadows on it is applied to the ambient light only; without them it multiplies the frame.
-Radius = 25.0                           # How far around each point to look for occluders, in game units. Larger reaches further up a wall or across a step.
+Radius = 50.0                           # How far around each point to look for occluders, in game units. Larger reaches further up a wall or across a step.
 Strength = 1.0                          # How dark occlusion gets.
 Contrast = 1.0                          # Pushes the result away from neutral: 0 leaves it as sampled, 1 doubles its distance from neutral.
 Range = 4000.0                          # Distance beyond which nothing is applied, in game units.
