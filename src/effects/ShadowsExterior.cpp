@@ -460,8 +460,9 @@ void ShadowsExteriorEffect::RegisterConstants() {
 	TheShaderManager->RegisterConstant("TESR_ShadowCameraDelta", &Constants.CameraDelta);
 	Constants.MoverData = D3DXVECTOR4(0.0f, 0.0f, 0.0f, 0.0f);
 	TheShaderManager->RegisterConstant("TESR_ShadowMoverData", &Constants.MoverData);
-	TheShaderManager->RegisterConstant("TESR_ShadowMovers", Constants.Movers);
-	TheShaderManager->RegisterConstant("TESR_ShadowMoverTrails", Constants.MoverTrails);
+	TheShaderManager->RegisterConstant("TESR_ShadowMoverAxes", Constants.MoverAxes);
+	TheShaderManager->RegisterConstant("TESR_ShadowMoverSegments", Constants.MoverSegments);
+	TheShaderManager->RegisterConstant("TESR_ShadowMoverShapes", Constants.MoverShapes);
 	TheShaderManager->RegisterConstant("TESR_ShadowPreviousViewProj", (D3DXVECTOR4*)&Constants.PreviousViewProj);
 	TheShaderManager->RegisterConstant("TESR_ShadowScreenSpaceData", &Constants.ScreenSpaceData);
 	TheShaderManager->RegisterConstant("TESR_ShadowComposite", &Constants.CompositeData);

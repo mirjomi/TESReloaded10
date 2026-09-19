@@ -18,8 +18,9 @@ float4 TESR_ShadowFilterData; // x: filter radius (texels), y: light bleed reduc
 float4 TESR_ShadowTemporalData; // x: enabled, y: history weight
 float4 TESR_ShadowCameraDelta; // xyz: current camera position minus the history's
 float4 TESR_ShadowMoverData; // x: number of moving shadow casters in the two arrays below
-float4 TESR_ShadowMovers[8]; // xyz: bound centre relative to the camera, w: bound radius
-float4 TESR_ShadowMoverTrails[8]; // xyz: path back to where its shadow may still be in the history, w: history weight around it
+float4 TESR_ShadowMoverAxes[3]; // the plane facing the sun (two axes), then the direction to the sun
+float4 TESR_ShadowMoverSegments[32]; // xy: bound centre in that plane, zw: path back to where its shadow may still be in the history
+float4 TESR_ShadowMoverShapes[32]; // x: highest point towards the sun plus radius, y: 1 / |path|^2, z: 1 / (0.5625 r^2), w: history weight
 float4x4 TESR_ShadowPreviousViewProj;
 float4x4 TESR_ShadowPreviousViewTransform;
 float4 TESR_ShadowNearCenter; // x,y,z: center (world space), w: radius
@@ -333,39 +334,43 @@ float4 Shadow(VSOUT IN) : COLOR0
 // down wherever one of them shades the point now or did over the life of the history.
 //
 // "Shades the point" is tested against the actor's bounding sphere swept back along its path.
-// Seen along the sun direction, everything on one line lies in the same shadow, so the point and
-// the swept segment are both flattened onto the plane facing the sun and it becomes a distance in
-// that plane. Only casters on the sun side of the point count. A point on the actor itself lies
-// inside its own sphere, so shadow sliding across the actor is covered as well.
+// Seen along the sun direction, everything on one line lies in the same shadow, so it is a distance
+// in the plane facing the sun. The CPU has already put each actor into that plane; here only the
+// point has to be. Only casters that reach above the point towards the sun count. A point on the
+// actor itself lies inside its own sphere, so shadow sliding across the actor is covered as well.
 float MoverHistoryWeight(float3 position, float weight) {
-    float3 toSun = normalize(TESR_SmoothedSunDir.xyz);
+    float2 point2D = float2(dot(position, TESR_ShadowMoverAxes[0].xyz), dot(position, TESR_ShadowMoverAxes[1].xyz));
+    float height = dot(position, TESR_ShadowMoverAxes[2].xyz);
     float result = weight;
 
-    // Unrolled, with each slot behind a branch on the count. A real loop compiles to a sixteen
-    // instruction select chain per iteration just to pick the array element: ps_3_0 can only index
-    // constants with the counter of a loop driven by an integer constant, and this framework only
-    // sets float ones. Unrolled, each slot reads its constants directly and unused slots are skipped.
+    // Every slot is unrolled. ps_3_0 cannot index constant registers dynamically - a loop over these
+    // arrays compiles to one compare per array element on every iteration, whatever the loop bound.
+    // Unrolled, each slot reads its constants directly.
+    //
+    // Slots are filled in order and skipped in blocks of four, not one at a time: in an effect every
+    // branch on a constant takes one of ps_3_0's sixteen boolean registers, and a branch per slot
+    // runs out of them. The CPU packs the unused tail of the last block so that it covers nothing.
     [unroll]
-    for (int i = 0; i < 8; i++) {
+    for (int block = 0; block < 32; block += 4) {
         [branch]
-        if (i < TESR_ShadowMoverData.x) {
-            float4 mover = TESR_ShadowMovers[i];
-            float4 trail = TESR_ShadowMoverTrails[i];
+        if (block < TESR_ShadowMoverData.x) {
+            [unroll]
+            for (int i = block; i < block + 4; i++) {
+                float4 segment = TESR_ShadowMoverSegments[i];
+                float4 shape = TESR_ShadowMoverShapes[i];
 
-            float3 centre = mover.xyz - position;
-            float3 centreFlat = centre - dot(centre, toSun) * toSun;
-            float3 trailFlat = trail.xyz - dot(trail.xyz, toSun) * toSun;
+                float2 offset = point2D - segment.xy;
+                offset -= saturate(dot(offset, segment.zw) * shape.y) * segment.zw;
 
-            float along = saturate(-dot(centreFlat, trailFlat) / max(dot(trailFlat, trailFlat), 0.0001f));
-            float distance = length(centreFlat + along * trailFlat);
-            float height = dot(centre + along * trail.xyz, toSun);
+                // 1 within the radius, 0 beyond 1.25 of it, smooth between, so the weight does not
+                // step at the edge. shape.z carries the radius so this works on squared distance:
+                // (1.5625 r^2 - d^2) / (0.5625 r^2).
+                float coverage = saturate(1.5625f / 0.5625f - dot(offset, offset) * shape.z);
+                coverage = coverage * coverage * (3.0f - 2.0f * coverage);
+                coverage = (shape.x > height) ? coverage : 0.0f;
 
-            // Soft over the outer quarter of the radius so the weight does not step at the edge.
-            float coverage = saturate((1.25f * mover.w - distance) / (0.25f * mover.w + 0.0001f));
-            coverage = coverage * coverage * (3.0f - 2.0f * coverage);
-            coverage *= (height > -mover.w) ? 1.0f : 0.0f;
-
-            result = min(result, lerp(weight, trail.w, coverage));
+                result = min(result, lerp(weight, shape.w, coverage));
+            }
         }
     }
     return result;

@@ -378,6 +378,21 @@ void ShadowManager::PublishMovers() {
 	std::sort(MoverSteps.begin(), MoverSteps.end(),
 		[](const MoverStep& a, const MoverStep& b) { return a.Distance < b.Distance; });
 
+	// The shader asks whether a point lies in the shadow of a sphere swept along a path. Seen along
+	// the sun direction everything on one line shares a shadow, so that is a distance in the plane
+	// facing the sun. The projection into that plane is the same for every pixel, so it is done here
+	// once, leaving the shader a 2D point to segment distance per actor.
+	D3DXVECTOR3 toSun(Constants->SmoothedSunDir.x, Constants->SmoothedSunDir.y, Constants->SmoothedSunDir.z);
+	D3DXVec3Normalize(&toSun, &toSun);
+	D3DXVECTOR3 helper = fabsf(toSun.z) < 0.99f ? D3DXVECTOR3(0.0f, 0.0f, 1.0f) : D3DXVECTOR3(1.0f, 0.0f, 0.0f);
+	D3DXVECTOR3 axisU, axisV;
+	D3DXVec3Cross(&axisU, &helper, &toSun);
+	D3DXVec3Normalize(&axisU, &axisU);
+	D3DXVec3Cross(&axisV, &toSun, &axisU);
+	Constants->MoverAxes[0] = D3DXVECTOR4(axisU, 0.0f);
+	Constants->MoverAxes[1] = D3DXVECTOR4(axisV, 0.0f);
+	Constants->MoverAxes[2] = D3DXVECTOR4(toSun, 0.0f);
+
 	int count = (int)MoverSteps.size() < ShadowsExteriorEffect::MoversMax ? (int)MoverSteps.size() : ShadowsExteriorEffect::MoversMax;
 	for (int i = 0; i < ShadowsExteriorEffect::MoversMax; i++) {
 		if (i < count) {
@@ -385,14 +400,35 @@ void ShadowManager::PublishMovers() {
 			const TrackedMover& Mover = Movers[Moved.Index];
 			float length = D3DXVec3Length(&Moved.Step);
 			float bounded = Mover.Texel / (Mover.Texel + length);
+			float radius = Mover.Bound.w > 1.0f ? Mover.Bound.w : 1.0f;
+
+			D3DXVECTOR3 centre = D3DXVECTOR3(Mover.Bound.x, Mover.Bound.y, Mover.Bound.z) - camera;
 			D3DXVECTOR3 trail = Moved.Step * -tailFrames;
-			Constants->Movers[i] = D3DXVECTOR4(Mover.Bound.x - camera.x, Mover.Bound.y - camera.y, Mover.Bound.z - camera.z, Mover.Bound.w);
-			Constants->MoverTrails[i] = D3DXVECTOR4(trail.x, trail.y, trail.z, bounded < weight ? bounded : weight);
+
+			// xy: centre in the plane facing the sun, zw: the path back, in the same plane.
+			float pathU = D3DXVec3Dot(&trail, &axisU);
+			float pathV = D3DXVec3Dot(&trail, &axisV);
+			Constants->MoverSegments[i] = D3DXVECTOR4(D3DXVec3Dot(&centre, &axisU), D3DXVec3Dot(&centre, &axisV), pathU, pathV);
+
+			// x: the highest the caster reaches towards the sun anywhere along its path, plus one radius,
+			// so a point counts as shaded unless it is above all of it. Taking the whole path's highest
+			// point rather than the height at the closest point is conservative and saves the shader a
+			// term. y: 1 / |path|^2 for projecting onto the path, 0 for a path too short to have a
+			// direction - the projection then lands on the centre, with no division to guard.
+			// z: 1 / (0.5625 r^2), which puts the soft edge of the coverage between r and 1.25 r when
+			// used on a squared distance. w: the history weight to use around it.
+			float centreHeight = D3DXVec3Dot(&centre, &toSun);
+			float pathHeight = D3DXVec3Dot(&trail, &toSun);
+			float pathLength2 = pathU * pathU + pathV * pathV;
+			Constants->MoverShapes[i] = D3DXVECTOR4(centreHeight + (pathHeight > 0.0f ? pathHeight : 0.0f) + radius,
+				pathLength2 > 0.0001f ? 1.0f / pathLength2 : 0.0f,
+				1.0f / (0.5625f * radius * radius), bounded < weight ? bounded : weight);
 		}
 		else {
-			// A radius of zero covers nothing.
-			Constants->Movers[i] = D3DXVECTOR4(0.0f, 0.0f, 0.0f, 0.0f);
-			Constants->MoverTrails[i] = D3DXVECTOR4(0.0f, 0.0f, 0.0f, weight);
+			// The shader runs slots in blocks of four, so the tail of the last block is read. These cover
+			// nothing: no point is that far below the sun.
+			Constants->MoverSegments[i] = D3DXVECTOR4(0.0f, 0.0f, 0.0f, 0.0f);
+			Constants->MoverShapes[i] = D3DXVECTOR4(-1.0e30f, 0.0f, 0.0f, weight);
 		}
 	}
 	Constants->MoverData.x = (float)count;
