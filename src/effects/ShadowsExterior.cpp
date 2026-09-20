@@ -100,7 +100,23 @@ bool ShadowsExteriorEffect::UpdateSettingsFromQuality(int quality) {
 		Settings.ShadowMaps.CascadeLambda = std::clamp(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.ShadowMaps", "CascadeLambda"), 0.0f, 1.0f);
 		Settings.ShadowMaps.LimitFrequency = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.ShadowMaps", "LimitFrequency");
 
-		Settings.ShadowMaps.CascadeResolution = (std::clamp(TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.ShadowMaps", "CascadeResolution"), 0, 2) + 2) * 512;
+		// 0..5 -> 1024, 1536, 2048, 2560, 3072, 3584 per cascade. The atlas packs 2x2 cascades,
+		// so the texture is twice this in each dimension: index 5 is a 7168x7168 atlas.
+		int cascadeStep = std::clamp(TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.ShadowMaps", "CascadeResolution"), 0, 5);
+		ULONG cascadeRes = (ULONG)(cascadeStep + 2) * 512;
+
+		// Cap against what the device can actually create. InitTexture does not report failure,
+		// so an atlas past the hardware limit would come back null and read as frozen or missing
+		// shadows rather than as an error.
+		if (TheRenderManager && TheRenderManager->device) {
+			D3DCAPS9 caps;
+			if (SUCCEEDED(TheRenderManager->device->GetDeviceCaps(&caps))) {
+				ULONG maxCascade = (ULONG)min(caps.MaxTextureWidth, caps.MaxTextureHeight) / 2;
+				while (cascadeRes > maxCascade && cascadeRes > 1024) cascadeRes -= 512;
+			}
+		}
+
+		Settings.ShadowMaps.CascadeResolution = cascadeRes;
 
 		Settings.ShadowMaps.MSAA = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.ShadowMaps", "MSAA");
 
