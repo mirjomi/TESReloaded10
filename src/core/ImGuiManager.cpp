@@ -582,9 +582,25 @@ static void** GetMouseVTable() {
 }
 
 static void PatchMouseVTable() {
+	// Patch once, ever - not "if slot 9 isn't already my hook". The COM vtable does not
+	// change across an overlay open or a D3D9 device reset (it belongs to the concrete class,
+	// not the instance), so re-patching on those events was never necessary. It is also unsafe
+	// with a second mod hooking the same slot: if it hooks in AFTER us it chains under our hook,
+	// saving OUR hook as its original. The old guard then reads "slot 9 is not my hook" and
+	// re-patches - capturing the other mod's hook as OriginalGetDeviceState, clobbering the
+	// true original. HookedGetDeviceState is a single static function so the slot looks
+	// unchanged, but our hook now calls theirs, which calls what they saved as the original -
+	// our hook - and the recursion is unbounded. Reported upstream as a stack overflow on
+	// opening the menu with CacheUI installed: ntdll, 0xC0000005, and no NVR crash log, since a
+	// guard page fault blows past the SEH based logger.
+	//
+	// Gating on OriginalGetDeviceState rather than a flag still lets a later call site succeed
+	// if the first one ran before the input device existed - GetMouseVTable returning null
+	// never sets it.
+	if (OriginalGetDeviceState) return;
+
 	void** vtable = GetMouseVTable();
-	if (!vtable) return;
-	if (vtable[9] == reinterpret_cast<void*>(HookedGetDeviceState)) return;
+	if (!vtable) return; // input not ready yet - a later call site gets a real attempt
 	OriginalGetDeviceState = reinterpret_cast<GetDeviceState_t>(vtable[9]);
 	DWORD old;
 	VirtualProtect(&vtable[9], sizeof(void*), PAGE_READWRITE, &old);
