@@ -444,8 +444,19 @@ void ShadowsExteriorEffect::RegisterTextures() {
 	if (!Settings.ShadowMaps.MSAA)
 		TheRenderManager->device->CreateDepthStencilSurface(ShadowAtlasSize, ShadowAtlasSize, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, true, &ShadowAtlasDepthSurface, NULL);
 	else {
-		TheRenderManager->device->CreateRenderTarget(ShadowAtlasSize, ShadowAtlasSize, Settings.ShadowMaps.Format, D3DMULTISAMPLE_4_SAMPLES, 0, 0, &ShadowAtlasSurfaceMSAA, NULL);
-		TheRenderManager->device->CreateDepthStencilSurface(ShadowAtlasSize, ShadowAtlasSize, D3DFMT_D24S8, D3DMULTISAMPLE_4_SAMPLES, 0, true, &ShadowAtlasDepthSurface, NULL);
+		// A multisampled atlas is four times the size of the atlas itself, which at 32 bit and a
+		// 2048 cascade resolution is over a gigabyte - and not all hardware can multisample a 128
+		// bit format at all. Failing silently here leaves a null surface and no shadows, with
+		// nothing in the log to say why.
+		ShadowAtlasSurfaceMSAA = nullptr;
+		HRESULT msaaResult = TheRenderManager->device->CreateRenderTarget(ShadowAtlasSize, ShadowAtlasSize, Settings.ShadowMaps.Format, D3DMULTISAMPLE_4_SAMPLES, 0, 0, &ShadowAtlasSurfaceMSAA, NULL);
+		if (FAILED(msaaResult) || !ShadowAtlasSurfaceMSAA) {
+			ShadowAtlasSurfaceMSAA = nullptr;
+			Logger::Log("[ERROR] Could not create the multisampled shadow atlas (%ux%u, format %i). Falling back to no MSAA - lower CascadeResolution or set Format to 0 if shadows are missing.", ShadowAtlasSize, ShadowAtlasSize, (int)Settings.ShadowMaps.Format);
+		}
+		// The depth surface has to match the colour target it is paired with, so it follows whether
+		// the multisampled one actually exists rather than whether it was asked for.
+		TheRenderManager->device->CreateDepthStencilSurface(ShadowAtlasSize, ShadowAtlasSize, D3DFMT_D24S8, ShadowAtlasSurfaceMSAA ? D3DMULTISAMPLE_4_SAMPLES : D3DMULTISAMPLE_NONE, 0, true, &ShadowAtlasDepthSurface, NULL);
 	}
 
 	for (int i = 0; i <= MapLod; i++) {
@@ -540,8 +551,19 @@ void ShadowsExteriorEffect::RecreateTextures(bool cascades, bool ortho, bool cub
 		if (!Settings.ShadowMaps.MSAA)
 			TheRenderManager->device->CreateDepthStencilSurface(ShadowAtlasSize, ShadowAtlasSize, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, true, &ShadowAtlasDepthSurface, NULL);
 		else {
-			TheRenderManager->device->CreateRenderTarget(ShadowAtlasSize, ShadowAtlasSize, Settings.ShadowMaps.Format, D3DMULTISAMPLE_4_SAMPLES, 0, 0, &ShadowAtlasSurfaceMSAA, NULL);
-			TheRenderManager->device->CreateDepthStencilSurface(ShadowAtlasSize, ShadowAtlasSize, D3DFMT_D24S8, D3DMULTISAMPLE_4_SAMPLES, 0, true, &ShadowAtlasDepthSurface, NULL);
+			// A multisampled atlas is four times the size of the atlas itself, which at 32 bit and a
+			// 2048 cascade resolution is over a gigabyte - and not all hardware can multisample a 128
+			// bit format at all. Failing silently here leaves a null surface and no shadows, with
+			// nothing in the log to say why.
+			ShadowAtlasSurfaceMSAA = nullptr;
+			HRESULT msaaResult = TheRenderManager->device->CreateRenderTarget(ShadowAtlasSize, ShadowAtlasSize, Settings.ShadowMaps.Format, D3DMULTISAMPLE_4_SAMPLES, 0, 0, &ShadowAtlasSurfaceMSAA, NULL);
+			if (FAILED(msaaResult) || !ShadowAtlasSurfaceMSAA) {
+				ShadowAtlasSurfaceMSAA = nullptr;
+				Logger::Log("[ERROR] Could not create the multisampled shadow atlas (%ux%u, format %i). Falling back to no MSAA - lower CascadeResolution or set Format to 0 if shadows are missing.", ShadowAtlasSize, ShadowAtlasSize, (int)Settings.ShadowMaps.Format);
+			}
+			// The depth surface has to match the colour target it is paired with, so it follows whether
+			// the multisampled one actually exists rather than whether it was asked for.
+			TheRenderManager->device->CreateDepthStencilSurface(ShadowAtlasSize, ShadowAtlasSize, D3DFMT_D24S8, ShadowAtlasSurfaceMSAA ? D3DMULTISAMPLE_4_SAMPLES : D3DMULTISAMPLE_NONE, 0, true, &ShadowAtlasDepthSurface, NULL);
 		}
 
 		for (int i = 0; i <= MapLod; i++) {
