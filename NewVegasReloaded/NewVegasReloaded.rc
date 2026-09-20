@@ -73,7 +73,7 @@ BEGIN
             VALUE "LegalCopyright", "Copyright (C) 2025"
             VALUE "OriginalFilename", "NewVegasReloaded.dll"
             VALUE "ProductName", "New Vegas Reloaded UNOFFICIAL (VHeyes)"
-            VALUE "ProductVersion", "4.4.5-vheyes.3"
+            VALUE "ProductVersion", "4.4.5-vheyes.4"
         END
     END
     BLOCK "VarFileInfo"
