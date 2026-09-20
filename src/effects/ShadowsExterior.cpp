@@ -45,6 +45,23 @@ void ShadowsExteriorEffect::UpdateConstants() {
 		// not sun shadows enabled), so the sun-shadow path can't share it. See the interior
 		// branch below.
 		Constants.FormatData.z = 1.0f;
+
+		// Temporal reuse. The history was rendered from historyCameraPosition, and world space
+		// here is relative to the camera, so the shader needs the difference to shift a point
+		// back into the frame the history belongs to before projecting it with that frame's matrix.
+		D3DXVECTOR4 cameraPosition = TheRenderManager->CameraPosition;
+		D3DXVECTOR4 delta = cameraPosition - historyCameraPosition;
+		Constants.CameraDelta = D3DXVECTOR4(delta.x, delta.y, delta.z, 0.0f);
+
+		// A jump too large to be walking is a load or a fast travel, and the history belongs to
+		// somewhere else entirely. Reprojection cannot detect that - the matrix is still valid,
+		// it just describes a different place - so it has to be caught here.
+		bool cut = !historyValid || D3DXVec3Length((D3DXVECTOR3*)&delta) > 500.0f;
+
+		// Nothing to filter while the forward path owns the cascades: it applies them per object
+		// in the lighting shaders, so they never reach this buffer.
+		Constants.TemporalData.x = Settings.ShadowMaps.TemporalFilter && !cut && !Settings.Exteriors.ForwardShadows;
+		Constants.TemporalData.y = Settings.ShadowMaps.TemporalWeight;
 	}
 	else {
 		// pass the enabled/disabled property of the shadow maps to the shadowfade constant
@@ -306,6 +323,11 @@ void ShadowsExteriorEffect::UpdateSettings() {
 	Settings.SunSmoothing.PitchStepSize = std::clamp(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.SunSmoothing", "PitchStepSize"), 0.0f, 15.0f);
 	Settings.SunSmoothing.MaxJumpAngle = std::clamp(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.SunSmoothing", "MaxJumpAngle"), 5.0f, 30.0f);
 
+	// Temporal reuse of the previous frame's shadow term. Read outside the quality presets so
+	// it stays tunable at any quality level.
+	Settings.ShadowMaps.TemporalFilter = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.ShadowMaps", "TemporalFilter");
+	Settings.ShadowMaps.TemporalWeight = std::clamp(TheSettingManager->GetSettingF("Shaders.ShadowsExteriors.ShadowMaps", "TemporalWeight"), 0.0f, 0.95f);
+
 	// Generic exterior shadows settings
 	Settings.Exteriors.Enabled = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.Main", "Enabled");
 	Settings.Exteriors.ForwardShadows = TheSettingManager->GetSettingI("Shaders.ShadowsExteriors.Main", "ForwardShadows");
@@ -406,12 +428,49 @@ void ShadowsExteriorEffect::clearShadowsBuffer() {
 }
 
 
+// Snapshot what the next frame will reproject from. Runs after the shadow pass has resolved,
+// so the shadow copy is the finished term - including the previous frame already blended into
+// it, which is what makes this an accumulation rather than a two frame average.
+void ShadowsExteriorEffect::UpdateTemporalHistory() {
+	if (!Settings.ShadowMaps.TemporalFilter || Settings.Exteriors.ForwardShadows) {
+		historyValid = false;
+		return;
+	}
+
+	IDirect3DDevice9* Device = TheRenderManager->device;
+	IDirect3DSurface9* depthSurface = TheShaderManager->Effects.CombineDepth->Textures.CombinedDepthSurface;
+	IDirect3DSurface9* normalsSurface = TheShaderManager->Effects.Normals->Textures.NormalsSurface;
+
+	if (!Textures.ShadowHistorySurface || !Textures.DepthHistorySurface || !Textures.NormalsHistorySurface ||
+		!depthSurface || !normalsSurface) {
+		historyValid = false;
+		return;
+	}
+
+	Device->StretchRect(Textures.ShadowPassSurface, NULL, Textures.ShadowHistorySurface, NULL, D3DTEXF_NONE);
+	Device->StretchRect(depthSurface, NULL, Textures.DepthHistorySurface, NULL, D3DTEXF_NONE);
+	// Normals are stored in VIEW space, so a raw copy rotates with the camera and would read as
+	// a different surface every time the player turns. Keep the view matrix that produced them
+	// so the shader can put them back into world space before comparing.
+	Device->StretchRect(normalsSurface, NULL, Textures.NormalsHistorySurface, NULL, D3DTEXF_NONE);
+
+	Constants.PreviousViewProj = TheRenderManager->ViewProjMatrix;
+	Constants.PreviousViewTransform = TheRenderManager->viewMatrix;
+	historyCameraPosition = TheRenderManager->CameraPosition;
+	historyValid = true;
+}
+
+
 void ShadowsExteriorEffect::RegisterConstants() {
 	TheShaderManager->RegisterConstant("TESR_SmoothedSunDir", &Constants.SmoothedSunDir);
 	TheShaderManager->RegisterConstant("TESR_ShadowData", &Constants.Data);
 	TheShaderManager->RegisterConstant("TESR_ShadowFormatData", &Constants.FormatData);
 	TheShaderManager->RegisterConstant("TESR_ShadowForwardData", &Constants.ForwardData);
 	TheShaderManager->RegisterConstant("TESR_ShadowBlur", &Constants.ShadowBlur);
+	TheShaderManager->RegisterConstant("TESR_ShadowTemporalData", &Constants.TemporalData);
+	TheShaderManager->RegisterConstant("TESR_ShadowCameraDelta", &Constants.CameraDelta);
+	TheShaderManager->RegisterConstant("TESR_ShadowPreviousViewProj", (D3DXVECTOR4*)&Constants.PreviousViewProj);
+	TheShaderManager->RegisterConstant("TESR_ShadowPreviousViewTransform", (D3DXVECTOR4*)&Constants.PreviousViewTransform);
 	TheShaderManager->RegisterConstant("TESR_ShadowScreenSpaceData", &Constants.ScreenSpaceData);
 	TheShaderManager->RegisterConstant("TESR_OrthoData", &Constants.OrthoData);
 	TheShaderManager->RegisterConstant("TESR_ShadowFade", &Constants.ShadowFade);
@@ -501,6 +560,12 @@ void ShadowsExteriorEffect::RegisterTextures() {
 
 	// Initialize shadow buffer
 	TheTextureManager->InitTexture("TESR_PointShadowBuffer", &Textures.ShadowPassTexture, &Textures.ShadowPassSurface, TheRenderManager->width, TheRenderManager->height, D3DFMT_G16R16);
+
+	// Formats must match their copy sources - these are filled with StretchRect, not rendered
+	// to, and StretchRect between differing formats is driver and DXVK dependent.
+	TheTextureManager->InitTexture("TESR_ShadowHistoryBuffer", &Textures.ShadowHistoryTexture, &Textures.ShadowHistorySurface, TheRenderManager->width, TheRenderManager->height, D3DFMT_G16R16);
+	TheTextureManager->InitTexture("TESR_ShadowDepthHistoryBuffer", &Textures.DepthHistoryTexture, &Textures.DepthHistorySurface, TheRenderManager->width, TheRenderManager->height, D3DFMT_G32R32F);
+	TheTextureManager->InitTexture("TESR_ShadowNormalsHistoryBuffer", &Textures.NormalsHistoryTexture, &Textures.NormalsHistorySurface, TheRenderManager->width, TheRenderManager->height, D3DFMT_A16B16G16R16F);
 
 	texturesInitialized = true;
 }
