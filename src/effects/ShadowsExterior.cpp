@@ -634,6 +634,13 @@ D3DXVECTOR3 ShadowsExteriorEffect::CalculateSmoothedSunDir() {
 		// Apply smoothing only if the change is small
 		if (angleDifference < maxJumpAngle) {
 			D3DXVec3Lerp(&SmoothedSunDir, &SmoothedSunDir, &SunDir, smoothingFactor);
+			// Lerping between two unit vectors cuts the corner, so the result is short. It is
+			// used as a direction to place the light eye at
+			// shadowFrustumCenter + SunDir * sphereRadius, where a short vector pulls the eye
+			// in and shifts the depth normalisation of the whole cascade. With the sun
+			// quantised the target is static and this converges back to unit length; without
+			// it the target moves every frame and the vector stays permanently short.
+			D3DXVec3Normalize(&SmoothedSunDir, &SmoothedSunDir);
 		}
 		else {
 			SmoothedSunDir = SunDir;
