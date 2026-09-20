@@ -91,6 +91,7 @@ bool SettingManager::Configuration::FillNode(ConfigNode* Node, const char* Secti
 			// attempt to get the setting from the user config
 			if (settingSection) {
 				setting = settingSection->at(Key);
+				fromDefault = false; // found explicitly in the user's own config - not a default fallback
 			}
 			else {
 				fromDefault = true;
