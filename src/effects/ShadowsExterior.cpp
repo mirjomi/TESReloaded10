@@ -773,13 +773,18 @@ D3DXMATRIX ShadowsExteriorEffect::GetCascadeViewProj(ShadowMapSettings* ShadowMa
 		float dist = D3DXVec3Length(&centerToCorner);
 		sphereRadius = max(sphereRadius, dist);
 	}
-	sphereRadius = std::ceil(sphereRadius * 16.0f) / 16.0f;
-
 	// Modify sphere radius to compensate for lower than default FOV (aiming, zooming, ...).
 	float defaultWorldFOV = *(float*)(0x120315C + 4);
 	float currentWorldFOV = WorldSceneGraph->cameraFOV;
 	float radiusFOVCompensation = tan(defaultWorldFOV * 0.5f * (3.1416f / 180.0f)) / tan(currentWorldFOV * 0.5f * (3.1416f / 180.0f));
 	sphereRadius *= radiusFOVCompensation;
+
+	// Quantise last. The radius sets the texel size, and the texel grid is what the snapping
+	// below aligns to, so it has to stop moving before anything can be aligned to it. This
+	// used to run before the FOV compensation, which promptly undid it - leaving the extents
+	// drifting continuously with aiming and weapon sway, so the snap was aligning to a grid
+	// of changing pitch.
+	sphereRadius = std::ceil(sphereRadius * 16.0f) / 16.0f;
 
 	maxExtents = D3DXVECTOR3(sphereRadius, sphereRadius, sphereRadius);
 	minExtents = -maxExtents;
