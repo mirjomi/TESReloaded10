@@ -199,6 +199,16 @@ struct VS_OUTPUT {
     
     float3 viewDir : TEXCOORD6;
     
+    // Object-space squared distance to each point light, for vanillaAttSq. Not taken from
+    // lightDir/light2Dir/light3Dir above: those are tangent-space, and a TBN basis only
+    // preserves length while it is orthonormal, which mirrored UVs and skinned meshes do not
+    // guarantee. .x is light 0 and is only meaningful under DIFFUSE/POINT, where light 0 is a
+    // point light rather than the sun; .y and .z are lights 2 and 3.
+    //
+    // Keep this in the same position as in PS_INPUT: interpolators are matched by DECLARATION
+    // ORDER, not by the TEXCOORDn number.
+    float3 lightDistSq : TEXCOORD5;
+    
 #ifdef PROJ_SHADOW
     float4 shadowUVs : TEXCOORD7;
 #endif
@@ -230,11 +240,16 @@ float4 TESR_DebugVar : register(c40);
 
 VS_OUTPUT main(VS_INPUT IN) {
     VS_OUTPUT OUT;
-    
+
+    // Zeroed unconditionally: the blocks below write only the components their macros enable,
+    // and vs_3_0 requires every component of OUT to be written before return. A component left
+    // at zero here is one the pixel shader never reads either - both sides carry the same guards.
+    OUT.lightDistSq = 0;
+
     OUT.uv = IN.uv.xy;
-    
+
     float4 position = IN.position.xyzw;
-    
+
     #ifndef SKIN
         float3x3 tbn = float3x3(IN.tangent.xyz, IN.binormal.xyz, IN.normal.xyz);
     
@@ -253,6 +268,7 @@ VS_OUTPUT main(VS_INPUT IN) {
     
     #if defined(DIFFUSE) || defined(POINT)
         float3 light = LightData[0].xyz - position.xyz;
+        OUT.lightDistSq.x = dot(light, light);
     #else
         float3 light = LightData[0].xyz;
     #endif
@@ -266,12 +282,14 @@ VS_OUTPUT main(VS_INPUT IN) {
         light = LightData[1].xyz - position.xyz;
         OUT.light2Dir.w = LightData[1].w;
         OUT.light2Dir.xyz = mul(tbn, light);
+        OUT.lightDistSq.y = dot(light, light);
     #endif
     
     #if LIGHTS > 2 || NUM_PT_LIGHTS > 2
         light = LightData[2].xyz - position.xyz;
         OUT.light3Dir.w = LightData[2].w;
         OUT.light3Dir.xyz = mul(tbn, light);
+        OUT.lightDistSq.z = dot(light, light);
     #endif
     
     #ifndef NO_VERTEX_COLOR
@@ -453,6 +471,11 @@ struct PS_INPUT {
     float4 light3Dir : TEXCOORD3_centroid;
 #endif
     float3 viewDir : TEXCOORD6_centroid;
+    // MUST stay in the same position as in VS_OUTPUT. Interpolators here are matched by
+    // DECLARATION ORDER, not by the TEXCOORDn number, so a field that moves relative to its
+    // neighbours swaps registers across the VS/PS boundary and the shader reads someone else's
+    // data. Not centroid-sampled: it is a per-vertex distance, not a screen-space quantity.
+    float3 lightDistSq : TEXCOORD5;
 #ifdef PROJ_SHADOW
     float4 shadowUVs : TEXCOORD7;
 #endif
@@ -561,8 +584,11 @@ PS_OUTPUT main(PS_INPUT IN) {
     #if !defined(DIFFUSE) && !defined(POINT)
         float3 lighting = getSunLighting(IN.lightDir.xyz, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
     #else
-        // Pointlights only.
-        float3 lighting = getPointLightLighting(IN.lightDir.xyz, IN.lightDir.w, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        // Pointlights only. Attenuated from the object-space distance the vertex shader carried,
+        // not from length(IN.lightDir.xyz) - that vector is tangent-space and its length is only
+        // correct while the TBN basis is orthonormal.
+        float att0 = vanillaAttSq(IN.lightDistSq.x, IN.lightDir.w);
+        float3 lighting = getPointLightLightingAtt(IN.lightDir.xyz, att0, PSLightColor[0].rgb * shadowMultiplier, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
     #endif
     
     // Self emmitance.
@@ -577,11 +603,13 @@ PS_OUTPUT main(PS_INPUT IN) {
     
     // Other light sources.
     #if LIGHTS > 1 || NUM_PT_LIGHTS > 1
-        lighting += getPointLightLighting(IN.light2Dir.xyz, IN.light2Dir.w, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        float att2 = vanillaAttSq(IN.lightDistSq.y, IN.light2Dir.w);
+        lighting += getPointLightLightingAtt(IN.light2Dir.xyz, att2, PSLightColor[1].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
     #endif
     
     #if LIGHTS > 2 || NUM_PT_LIGHTS > 2
-        lighting += getPointLightLighting(IN.light3Dir.xyz, IN.light3Dir.w, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
+        float att3 = vanillaAttSq(IN.lightDistSq.z, IN.light3Dir.w);
+        lighting += getPointLightLightingAtt(IN.light3Dir.xyz, att3, PSLightColor[2].rgb, IN.viewDir.xyz, normal.xyz, baseColor.rgb, roughness);
     #endif
     
     float3 finalColor = lighting.rgb;
