@@ -712,6 +712,14 @@ void ShaderManager::RenderEffectsPreTonemapping(IDirect3DSurface9* RenderTarget)
 			Effects.ShadowsExteriors->UpdateTemporalHistory();
 		}
 	}
+	else {
+		// Nothing above ran this frame, so ShadowPassSurface keeps whatever it last held - an
+		// exterior sun shadow composite, walked in from outdoors, frozen here for as long as
+		// this branch keeps being skipped (an interior with interior point shadows off is the
+		// common case). Other effects sample it unconditionally, Specular among them, so reset
+		// it to the neutral no shadow value instead of leaving exterior data for them to read.
+		Effects.ShadowsExteriors->clearShadowsBuffer();
+	}
 
 	Device->SetRenderTarget(0, RenderTarget);
 
