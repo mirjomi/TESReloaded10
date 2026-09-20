@@ -747,6 +747,7 @@ Distance = 6000                      # Distance to render shadows for. The unit 
 CascadeLambda = 0.9					 # [0.0-1.0] Controls how cascades are split, higher value means nearer cascades get higher resolution.
 LimitFrequency = true				 # Limit the update frequency of the furthest cascade (once per four frames).
 TemporalFilter = true				 # Reuse the previous frame's shadow where it still describes the same surface. The sun moves the shadow map far too slowly to see, but fast enough to re-quantise every shadow edge each frame, so almost all of the frame to frame change is noise and averaging it away costs nothing real. Has no effect while ForwardShadows is on, which applies the cascades per object instead.
+TemporalMovers = true				 # Stop the shadows of moving actors trailing behind them. The filter rejects history where the surface changed, but the ground under a moving shadow is the same ground, so on its own it keeps the old shadow. With this on the shadow pass tells it which actors moved, and the weight around each one is lowered just enough to hold its trail to about one shadow texel. Actors standing still keep the full weight. Covers the nearest 32 moving actors.
 TemporalWeight = 0.9				 # [0.0-0.95] How much of the previous frame to keep. Higher is steadier and slower to react; shadows cast by moving things will trail if pushed too far. This is a per frame weight, so the time it settles over depends on framerate - lower it if you run well below 60.
 
 [_Shaders.ShadowsExteriors.Ortho]

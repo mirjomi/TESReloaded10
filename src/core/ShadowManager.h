@@ -54,6 +54,26 @@ public:
 	bool					ShadowShadersLoaded;
 	int						FrameCounter;
 
+	// Actors drawn into the sun cascades, this frame and the one before. The temporal filter cannot
+	// tell a moving actor's shadow from a static one, so it is told where they are - see PublishMovers.
+	struct TrackedMover {
+		UInt32				RefID;
+		D3DXVECTOR3			Position;	// root node, world space
+		D3DXVECTOR4			Bound;		// world bound: xyz centre, w radius
+		float				Texel;		// world size of a texel in the finest cascade that drew it
+	};
+	struct MoverStep {
+		float				Distance;	// from the camera
+		size_t				Index;		// into Movers
+		D3DXVECTOR3			Step;		// world space movement since the previous frame
+	};
+	std::vector<TrackedMover>	Movers;
+	std::vector<TrackedMover>	PreviousMovers;
+	std::vector<MoverStep>		MoverSteps;
+	bool					TrackMovers;
+	void					TrackMover(TESObjectREFR* Ref, NiNode* Node, ShadowsExteriorEffect::ShadowMapSettings* ShadowMap);
+	void					PublishMovers();
+
 private:
 	bool					CheckShaderFlags(NiGeometry* Geometry);
 	void					RecalculateBillboardVectors(D3DXVECTOR3* SunDir);
