@@ -811,11 +811,33 @@ D3DXMATRIX ShadowsExteriorEffect::GetCascadeViewProj(ShadowMapSettings* ShadowMa
 	D3DXMatrixOrthoOffCenterRH(&shadowProj, minExtents.x, maxExtents.x, minExtents.y, maxExtents.y, nearPlane, farPlane);
 	shadowViewProj = shadowView * shadowProj;
 
-	// Create the rounding matrix, by projecting the world-space origin and determining
-	// the fractional offset in texel space.
+	// Snap the projection to the texel grid so the shadow lattice stays pinned to the world
+	// instead of sliding under a moving camera. The correction applied is
+	// frac(L(anchor) / texel), so the anchor has to be a fixed world point - but it also has
+	// to be a NEAR one, and that is where this went wrong.
+	//
+	// Rotating the light moves a point's light space position in proportion to its distance
+	// from the light. In camera relative space (-cameraPosition) is the world ORIGIN, which
+	// out in a worldspace is tens of thousands of units away. A sun step of a few 1e-5 radians
+	// sweeps it past several texels every frame, so frac() returns essentially a random number
+	// and the correction meant to stabilise the map displaces it randomly instead. The camera
+	// walking does the same thing more slowly, which is why this is visible with QuantizeSun
+	// on as well - quantising freezes the sun's contribution to the phase, not the camera's.
+	//
+	// Anchoring to a power-of-two world grid near the camera keeps the anchor fixed for long
+	// stretches, while cutting the lever arm from the whole worldspace coordinate down to
+	// roughly the cascade radius. Scaling the grid with that radius keeps both the residual
+	// jitter and the once-per-grid-step re-anchor constant in texels across all four cascades.
+	//
+	// Rotation within a cascade is not the problem: it moves geometry by sphereRadius * dTheta,
+	// which at 2048 texels is around 0.04 texels per frame.
 	float sMapSize = ShadowMap->ShadowMapResolution;
-	// We are working in camera relative world space - camera position is our fixed point for stabilization.
-	D3DXVECTOR4 shadowOrigin(-cameraPosition.x, -cameraPosition.y, -cameraPosition.z, 1.0f);
+	float anchorGrid = std::exp2(std::ceil(std::log2(max(sphereRadius, 1.0f))));
+	D3DXVECTOR4 shadowOrigin(
+		std::floor(cameraPosition.x / anchorGrid + 0.5f) * anchorGrid - cameraPosition.x,
+		std::floor(cameraPosition.y / anchorGrid + 0.5f) * anchorGrid - cameraPosition.y,
+		std::floor(cameraPosition.z / anchorGrid + 0.5f) * anchorGrid - cameraPosition.z,
+		1.0f);
 	D3DXVec4Transform(&shadowOrigin, &shadowOrigin, &shadowViewProj);
 	D3DXVec4Scale(&shadowOrigin, &shadowOrigin, sMapSize / 2.0f);
 	D3DXVECTOR4 roundedOrigin, roundOffset;
